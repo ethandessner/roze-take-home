@@ -57,10 +57,25 @@ function extractEmails(headerValue: string): string[] {
 }
 
 /**
- * Maps each email address seen in From/To headers within this batch to the
- * latest message date on which they actually appear as a sender or
- * recipient - i.e. a genuine "interaction", not just co-occurrence in the
- * same batch of threads.
+ * Heuristic match for automated/third-party notification senders (calendar
+ * schedulers, no-reply addresses, etc.). Messages sent BY these senders
+ * don't represent a genuine personal interaction, even if a real contact's
+ * address happens to appear in the To/Cc headers (e.g. a Calendly
+ * confirmation email listing both the organizer and invitee).
+ */
+const AUTOMATED_SENDER_PATTERN =
+  /no-?reply|do-?not-?reply|notifications?@|mailer-daemon|@calendly\.com|@docusign|@zoom\.us|calendar-notification|@github\.com|@linkedin\.com/i;
+
+function isAutomatedSender(fromHeader: string): boolean {
+  return AUTOMATED_SENDER_PATTERN.test(fromHeader);
+}
+
+/**
+ * Maps each email address to the latest date they were the sender or a
+ * recipient of a genuinely person-to-person email within this batch - i.e.
+ * a real interaction, not just co-occurrence in the same batch of threads,
+ * and not an automated/third-party notification that merely listed their
+ * address in a header.
  */
 export function computeLastInteractionByEmail(
   threads: ParsedMessage[][]
@@ -69,6 +84,8 @@ export function computeLastInteractionByEmail(
 
   for (const thread of threads) {
     for (const msg of thread) {
+      if (isAutomatedSender(msg.from)) continue;
+
       const t = Date.parse(msg.date || "");
       if (Number.isNaN(t)) continue;
       const participants = new Set([...extractEmails(msg.from), ...extractEmails(msg.to)]);

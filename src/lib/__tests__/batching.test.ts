@@ -31,6 +31,25 @@ describe("computeLastInteractionByEmail", () => {
     );
   });
 
+  it("does not count an automated Calendly notification as a genuine interaction, even if it lists a real contact's address", () => {
+    const threads: ParsedMessage[][] = [
+      // Real personal email from Wells - older.
+      [msg({ threadId: "t1", from: "Wells Douraghy <wells@withjuly.com>", to: "me@example.com", date: "2024-01-01T00:00:00Z" })],
+      // Automated Calendly confirmation listing both parties - newer, but not a real interaction.
+      [
+        msg({
+          threadId: "t2",
+          from: "Calendly <notifications@calendly.com>",
+          to: "me@example.com, wells@withjuly.com",
+          date: "2024-06-01T00:00:00Z",
+        }),
+      ],
+    ];
+
+    const result = computeLastInteractionByEmail(threads);
+    expect(result.get("wells@withjuly.com")).toBe(new Date("2024-01-01T00:00:00Z").toISOString());
+  });
+
   it("takes the max date across multiple messages involving the same person", () => {
     const threads: ParsedMessage[][] = [
       [
