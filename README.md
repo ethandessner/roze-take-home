@@ -45,7 +45,7 @@ roze prompt "What's still open with the Acme contract renewal?"
 roze prompt "What tools or topics have I been reading about lately?"
 ```
 
-For large mailboxes, `roze generate --limit 300` only processes the 300 most recent messages, which is useful for a quick end-to-end test before committing to a full run. `generate` self-throttles its Gmail API calls (default 8 req/sec, override with `ROZE_GMAIL_RPS`) and automatically backs off and retries on 429/quota errors, so a full run on a large mailbox will simply take longer rather than fail — it also caches fetched messages in `~/.roze/gmail-cache.json` so re-running `generate` after an interruption doesn't re-fetch messages already downloaded.
+For large mailboxes, `roze generate --limit 100` only processes the 100 most recent messages, which is useful for a quick end-to-end test before committing to a full run. `generate` self-throttles its Gmail API calls (default 8 req/sec, override with `ROZE_GMAIL_RPS`) and automatically backs off and retries on 429/quota errors, so a full run on a large mailbox will simply take longer rather than fail — it also caches fetched messages in `~/.roze/gmail-cache.json` so re-running `generate` after an interruption doesn't re-fetch messages already downloaded.
 
 - `auth` opens your browser to the Google consent screen and stores tokens locally.
 - `generate` fetches your Gmail history (with a progress bar), extracts People/Projects/Interests/Open Loops in batches via OpenAI, and persists the result to a local SQLite database.
