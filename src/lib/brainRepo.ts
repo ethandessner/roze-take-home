@@ -237,22 +237,35 @@ export function upsertInterest(input: ExtractedInterest): void {
   }
 }
 
-export function insertOpenLoop(input: ExtractedOpenLoop): void {
+export function upsertOpenLoop(input: ExtractedOpenLoop): void {
   if (!input.description?.trim()) return;
   const db = getDb();
+  const incomingStatus = input.status ?? "open";
 
-  const duplicate = db
-    .prepare(
-      `SELECT id FROM open_loops WHERE status = 'open' AND lower(description) = ?`
-    )
-    .get(input.description.trim().toLowerCase());
-  if (duplicate) return;
+  const existing = db
+    .prepare(`SELECT id, status FROM open_loops WHERE lower(description) = ?`)
+    .get(input.description.trim().toLowerCase()) as
+    | { id: number; status: OpenLoop["status"] }
+    | undefined;
+
+  if (existing) {
+    // Batches aren't processed in global chronological order, so treat
+    // "resolved" as sticky: a later batch observing this loop as resolved
+    // closes it, but an older batch still seeing it as open must not
+    // reopen something we already know was resolved.
+    if (existing.status === "open" && incomingStatus === "resolved") {
+      db.prepare(
+        `UPDATE open_loops SET status = 'resolved', updated_at = datetime('now') WHERE id = ?`
+      ).run(existing.id);
+    }
+    return;
+  }
 
   db.prepare(
     `INSERT INTO open_loops (description, status, owner, related_people, due_hint, source_thread_id) VALUES (?, ?, ?, ?, ?, ?)`
   ).run(
     input.description.trim(),
-    input.status ?? "open",
+    incomingStatus,
     input.owner ?? null,
     JSON.stringify(input.related_people ?? []),
     input.due_hint ?? null,

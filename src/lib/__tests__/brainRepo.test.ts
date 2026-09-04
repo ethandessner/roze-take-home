@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { _resetDbForTests } from "../db.js";
 import {
-  insertOpenLoop,
+  upsertOpenLoop,
   loadFullBrain,
   upsertInterest,
   upsertPerson,
@@ -71,12 +71,30 @@ describe("upsertInterest", () => {
   });
 });
 
-describe("insertOpenLoop", () => {
+describe("upsertOpenLoop", () => {
   it("does not duplicate an identical open loop description", () => {
-    insertOpenLoop({ description: "Send contract redline to legal", status: "open", owner: "me" });
-    insertOpenLoop({ description: "send contract redline to legal", status: "open" });
+    upsertOpenLoop({ description: "Send contract redline to legal", status: "open", owner: "me" });
+    upsertOpenLoop({ description: "send contract redline to legal", status: "open" });
 
     const brain = loadFullBrain();
     expect(brain.openLoops).toHaveLength(1);
+  });
+
+  it("closes an existing open loop when a later batch reports it resolved", () => {
+    upsertOpenLoop({ description: "Send contract redline to legal", status: "open" });
+    upsertOpenLoop({ description: "send contract redline to legal", status: "resolved" });
+
+    const brain = loadFullBrain();
+    expect(brain.openLoops).toHaveLength(1);
+    expect(brain.openLoops[0].status).toBe("resolved");
+  });
+
+  it("does not reopen a resolved loop when an out-of-order batch still sees it as open", () => {
+    upsertOpenLoop({ description: "Send contract redline to legal", status: "resolved" });
+    upsertOpenLoop({ description: "send contract redline to legal", status: "open" });
+
+    const brain = loadFullBrain();
+    expect(brain.openLoops).toHaveLength(1);
+    expect(brain.openLoops[0].status).toBe("resolved");
   });
 });

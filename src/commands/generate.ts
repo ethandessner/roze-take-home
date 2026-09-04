@@ -19,7 +19,7 @@ import {
   upsertPerson,
   upsertProject,
   upsertInterest,
-  insertOpenLoop,
+  upsertOpenLoop,
   setMeta,
   loadFullBrain,
 } from "../lib/brainRepo.js";
@@ -105,7 +105,7 @@ export async function runGenerate(options: GenerateOptions = {}): Promise<void> 
         totals.interests++;
       }
       for (const loop of extraction.open_loops) {
-        insertOpenLoop(loop);
+        upsertOpenLoop(loop);
         totals.openLoops++;
       }
     } catch (err) {
