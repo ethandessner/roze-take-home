@@ -32,3 +32,21 @@ export function renderThreadsForExtraction(threads: ParsedMessage[][]): string {
 
   return sections.join("\n\n");
 }
+
+/**
+ * The most recent message date found anywhere in a batch of threads, as an
+ * ISO string. Used as a (necessarily approximate) "last interacted"/"last
+ * activity" timestamp for entities extracted from that batch, since the
+ * extraction step doesn't map individual facts back to individual message
+ * dates.
+ */
+export function latestDateInThreads(threads: ParsedMessage[][]): string | null {
+  let latest: number | null = null;
+  for (const thread of threads) {
+    for (const msg of thread) {
+      const t = Date.parse(msg.date || "");
+      if (!Number.isNaN(t) && (latest === null || t > latest)) latest = t;
+    }
+  }
+  return latest === null ? null : new Date(latest).toISOString();
+}

@@ -59,6 +59,28 @@ describe("formatBrainAsContext", () => {
     expect(text).toContain("Send redline");
   });
 
+  it("renders a real last-interacted date when present, as a plain date (not the generate run time)", () => {
+    const brain: Brain = {
+      people: [
+        {
+          id: 1,
+          name: "Bob",
+          email: null,
+          relationshipContext: null,
+          lastInteractedAt: "2024-03-15T10:00:00.000Z",
+          notes: null,
+        },
+      ],
+      projects: [],
+      interests: [],
+      openLoops: [],
+      meta: {},
+    };
+
+    const text = formatBrainAsContext(brain);
+    expect(text).toContain("last email evidence: 2024-03-15");
+  });
+
   it("omits resolved open loops from the rendered context", () => {
     const brain: Brain = {
       people: [],

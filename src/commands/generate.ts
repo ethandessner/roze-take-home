@@ -2,7 +2,7 @@ import cliProgress from "cli-progress";
 import ora from "ora";
 import { getAuthedClient } from "../lib/auth.js";
 import { getGmailClient, listAllMessageIds, getMessages, groupByThread } from "../lib/gmail.js";
-import { chunkThreads, renderThreadsForExtraction } from "../lib/batching.js";
+import { chunkThreads, renderThreadsForExtraction, latestDateInThreads } from "../lib/batching.js";
 import { extractFromBatch } from "../lib/extract.js";
 import {
   upsertPerson,
@@ -62,15 +62,16 @@ export async function runGenerate(options: GenerateOptions = {}): Promise<void> 
     spinner.text = `Analyzing batch ${i + 1}/${batches.length}...`;
 
     const batchText = renderThreadsForExtraction(batches[i]);
+    const batchDate = latestDateInThreads(batches[i]);
     try {
       const extraction = await extractFromBatch(batchText);
 
       for (const person of extraction.people) {
-        upsertPerson(person);
+        upsertPerson(person, batchDate);
         totals.people++;
       }
       for (const project of extraction.projects) {
-        upsertProject(project);
+        upsertProject(project, batchDate);
         totals.projects++;
       }
       for (const interest of extraction.interests) {

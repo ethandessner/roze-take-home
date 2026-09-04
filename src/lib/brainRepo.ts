@@ -83,10 +83,27 @@ export interface ExtractedOpenLoop {
 // Upsert / merge functions
 // ---------------------------------------------------------------------------
 
-export function upsertPerson(input: ExtractedPerson): void {
+/**
+ * Returns whichever of the two ISO-ish date strings is chronologically
+ * later, tolerating nulls. Used to make "last interacted"/"last activity"
+ * timestamps reflect the real most-recent email date rather than the time
+ * `generate` happened to run.
+ */
+function maxDate(a: string | null | undefined, b: string | null | undefined): string | null {
+  if (!a) return b ?? null;
+  if (!b) return a ?? null;
+  return a > b ? a : b;
+}
+
+export function upsertPerson(
+  input: ExtractedPerson,
+  /** Real date (ISO string) of the email evidence this came from, if known. */
+  interactionDate?: string | null
+): void {
   if (!input.name?.trim()) return;
   const db = getDb();
   const email = input.email?.trim().toLowerCase() || null;
+  const eventDate = interactionDate ?? new Date().toISOString();
 
   const existing = email
     ? (db
@@ -102,24 +119,31 @@ export function upsertPerson(input: ExtractedPerson): void {
       existing.relationship_context,
       input.relationship_context
     );
+    const lastInteractedAt = maxDate(existing.last_interacted_at, eventDate);
     db.prepare(
-      `UPDATE people SET relationship_context = ?, notes = ?, last_interacted_at = datetime('now'), updated_at = datetime('now'), email = coalesce(email, ?) WHERE id = ?`
-    ).run(mergedContext, mergedNotes, email, existing.id);
+      `UPDATE people SET relationship_context = ?, notes = ?, last_interacted_at = ?, updated_at = datetime('now'), email = coalesce(email, ?) WHERE id = ?`
+    ).run(mergedContext, mergedNotes, lastInteractedAt, email, existing.id);
   } else {
     db.prepare(
-      `INSERT INTO people (name, email, relationship_context, notes, last_interacted_at) VALUES (?, ?, ?, ?, datetime('now'))`
+      `INSERT INTO people (name, email, relationship_context, notes, last_interacted_at) VALUES (?, ?, ?, ?, ?)`
     ).run(
       input.name.trim(),
       email,
       input.relationship_context ?? null,
-      input.notes ?? null
+      input.notes ?? null,
+      eventDate
     );
   }
 }
 
-export function upsertProject(input: ExtractedProject): void {
+export function upsertProject(
+  input: ExtractedProject,
+  /** Real date (ISO string) of the email evidence this came from, if known. */
+  activityDate?: string | null
+): void {
   if (!input.name?.trim()) return;
   const db = getDb();
+  const eventDate = activityDate ?? new Date().toISOString();
   const existing = db
     .prepare(`SELECT * FROM projects WHERE lower(name) = ?`)
     .get(input.name.trim().toLowerCase()) as ProjectRow | undefined;
@@ -134,22 +158,25 @@ export function upsertProject(input: ExtractedProject): void {
       (input.description?.length ?? 0) > (existing.description?.length ?? 0)
         ? input.description
         : existing.description;
+    const lastActivityAt = maxDate(existing.last_activity_at, eventDate);
     db.prepare(
-      `UPDATE projects SET description = ?, status = ?, participants = ?, last_activity_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+      `UPDATE projects SET description = ?, status = ?, participants = ?, last_activity_at = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(
       description ?? null,
       input.status ?? existing.status,
       JSON.stringify(mergedParticipants),
+      lastActivityAt,
       existing.id
     );
   } else {
     db.prepare(
-      `INSERT INTO projects (name, description, status, participants, last_activity_at) VALUES (?, ?, ?, ?, datetime('now'))`
+      `INSERT INTO projects (name, description, status, participants, last_activity_at) VALUES (?, ?, ?, ?, ?)`
     ).run(
       input.name.trim(),
       input.description ?? null,
       input.status ?? "active",
-      JSON.stringify(incomingParticipants)
+      JSON.stringify(incomingParticipants),
+      eventDate
     );
   }
 }
@@ -302,7 +329,7 @@ export function formatBrainAsContext(brain: Brain): string {
     lines.push(
       `- ${p.name}${p.email ? ` <${p.email}>` : ""}: ${p.relationshipContext ?? "no context"}${
         p.notes ? ` | notes: ${p.notes}` : ""
-      }`
+      }${p.lastInteractedAt ? ` | last email evidence: ${toDateOnly(p.lastInteractedAt)}` : ""}`
     );
   }
 
@@ -312,7 +339,7 @@ export function formatBrainAsContext(brain: Brain): string {
     lines.push(
       `- ${p.name} [${p.status}]: ${p.description ?? "no description"}${
         p.participants.length ? ` | participants: ${p.participants.join(", ")}` : ""
-      }`
+      }${p.lastActivityAt ? ` | last email evidence: ${toDateOnly(p.lastActivityAt)}` : ""}`
     );
   }
 
@@ -338,6 +365,11 @@ export function formatBrainAsContext(brain: Brain): string {
   }
 
   return lines.join("\n");
+}
+
+function toDateOnly(isoOrSqlDate: string): string {
+  const t = Date.parse(isoOrSqlDate);
+  return Number.isNaN(t) ? isoOrSqlDate : new Date(t).toISOString().slice(0, 10);
 }
 
 function mergeText(
