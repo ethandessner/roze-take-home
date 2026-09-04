@@ -101,4 +101,4 @@ Testing against a ~5,000-message account surfaced constraints that a small test 
 
 Per the brief's explicit non-goals: no web UI, no production Google verification (Testing mode with `agent@roze.ai` as a test user), no multi-user infrastructure, no processing of messages that arrive after the initial `generate` (no incremental sync or watch), and no integrations beyond Gmail.
 
-On testing, I wrote 22 unit tests covering the pure logic where correctness is genuinely non-obvious — Gmail MIME/base64url parsing and thread grouping, brain merge/dedupe behavior, interaction-date attribution (including a regression test for the Calendly case above), and output wrapping. I deliberately did not test against live Google or OpenAI APIs, or chase coverage on glue code.
+On testing, I wrote 24 unit tests covering the pure logic where correctness is genuinely non-obvious — Gmail MIME/base64url parsing and thread grouping, brain merge/dedupe behavior, interaction-date attribution (including a regression test for the Calendly case above), and output wrapping. I deliberately did not test against live Google or OpenAI APIs, or chase coverage on glue code.

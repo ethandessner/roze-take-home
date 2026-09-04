@@ -75,7 +75,6 @@ function migrate(database: Database.Database): void {
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
       owner TEXT,
       related_people TEXT NOT NULL DEFAULT '[]',
-      related_project_id INTEGER REFERENCES projects(id),
       due_hint TEXT,
       source_thread_id TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -91,6 +90,7 @@ function migrate(database: Database.Database): void {
   // Lightweight migration for DBs created before evidence_snippet existed.
   addColumnIfMissing(database, "people", "evidence_snippet", "TEXT");
   addColumnIfMissing(database, "projects", "evidence_snippet", "TEXT");
+  addColumnIfMissing(database, "interests", "evidence_snippet", "TEXT");
 }
 
 function addColumnIfMissing(

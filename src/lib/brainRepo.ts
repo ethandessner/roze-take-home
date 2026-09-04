@@ -38,7 +38,6 @@ export interface OpenLoop {
   status: "open" | "resolved";
   owner: string | null;
   relatedPeople: string[];
-  relatedProjectId: number | null;
   dueHint: string | null;
   sourceThreadId: string | null;
 }
@@ -350,7 +349,6 @@ export function loadFullBrain(): Brain {
       status: r.status,
       owner: r.owner,
       relatedPeople: JSON.parse(r.related_people),
-      relatedProjectId: r.related_project_id,
       dueHint: r.due_hint,
       sourceThreadId: r.source_thread_id,
     })
@@ -473,7 +471,6 @@ interface OpenLoopRow {
   status: OpenLoop["status"];
   owner: string | null;
   related_people: string;
-  related_project_id: number | null;
   due_hint: string | null;
   source_thread_id: string | null;
 }
