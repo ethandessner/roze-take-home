@@ -1,9 +1,17 @@
 #!/usr/bin/env node
-import "dotenv/config";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { config as loadEnv } from "dotenv";
 import { Command } from "commander";
 import { runAuth } from "./commands/auth.js";
 import { runGenerate } from "./commands/generate.js";
 import { runPrompt } from "./commands/prompt.js";
+
+// Load .env from the project root (next to package.json), not from the
+// current working directory — so `roze` works the same whether it's run
+// from the project root, a subdirectory, or as a globally linked command.
+const __dirname = dirname(fileURLToPath(import.meta.url));
+loadEnv({ path: join(__dirname, "..", ".env") });
 
 const program = new Command();
 

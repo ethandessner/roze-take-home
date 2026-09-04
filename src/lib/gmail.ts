@@ -80,7 +80,7 @@ export async function getMessages(
   ids: string[],
   onProgress?: (done: number, total: number) => void
 ): Promise<ParsedMessage[]> {
-  const limit = pLimit(5);
+  const limit = pLimit(3);
   let done = 0;
   const results = await Promise.all(
     ids.map((id) =>
@@ -200,24 +200,54 @@ function saveCache(cache: Cache): void {
 }
 
 // ---------------------------------------------------------------------------
-// Retry with exponential backoff on 429/5xx
+// Retry with exponential backoff on 429/403 rate-limit/quota errors and 5xx
 // ---------------------------------------------------------------------------
+
+interface GoogleApiErrorLike {
+  code?: number | string;
+  status?: number;
+  response?: { status?: number; headers?: Record<string, string> };
+  errors?: { reason?: string }[];
+  message?: string;
+}
+
+function isRetryable(err: unknown): boolean {
+  const e = err as GoogleApiErrorLike;
+  const status =
+    e?.response?.status ?? (typeof e?.code === "number" ? e.code : undefined) ?? e?.status;
+
+  if (status === 429 || (typeof status === "number" && status >= 500)) return true;
+
+  // Gmail/Google API quota and rate-limit errors are sometimes surfaced as
+  // 403s with a specific reason, or without a clean numeric status at all -
+  // fall back to matching on the reason/message text.
+  const reasons = (e?.errors ?? []).map((x) => x.reason ?? "").join(" ");
+  const text = `${reasons} ${e?.message ?? ""}`.toLowerCase();
+  return /quota|rate limit|rateLimitExceeded|resource_exhausted/i.test(text);
+}
 
 async function withRetry<T>(
   fn: () => Promise<T>,
-  maxAttempts = 5
+  maxAttempts = 8
 ): Promise<T> {
   let attempt = 0;
   while (true) {
     try {
       return await fn();
     } catch (err) {
-      const status = (err as { code?: number; response?: { status?: number } })
-        ?.response?.status ?? (err as { code?: number })?.code;
-      const retryable = status === 429 || (typeof status === "number" && status >= 500);
       attempt += 1;
-      if (!retryable || attempt >= maxAttempts) throw err;
-      const delayMs = Math.min(1000 * 2 ** attempt, 15_000);
+      if (!isRetryable(err) || attempt >= maxAttempts) throw err;
+
+      const retryAfterHeader = (err as GoogleApiErrorLike)?.response?.headers?.[
+        "retry-after"
+      ];
+      const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : undefined;
+      const backoffMs = Math.min(2000 * 2 ** attempt, 60_000);
+      const delayMs = retryAfterMs && !Number.isNaN(retryAfterMs) ? retryAfterMs : backoffMs;
+
+      console.warn(
+        `\nGmail API rate/quota limit hit, waiting ${Math.round(delayMs / 1000)}s before retrying (attempt ${attempt}/${maxAttempts})...`
+      );
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
