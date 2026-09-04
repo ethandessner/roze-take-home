@@ -15,16 +15,28 @@ import {
 
 const THREADS_PER_BATCH = 15;
 
-export async function runGenerate(): Promise<void> {
+export interface GenerateOptions {
+  /** Only process the N most recent messages (Gmail returns newest first). */
+  limit?: number;
+}
+
+export async function runGenerate(options: GenerateOptions = {}): Promise<void> {
   const authClient = getAuthedClient();
   const gmail = getGmailClient(authClient);
 
   console.log("Reading your email history...");
 
-  const ids = await listAllMessageIds(gmail);
+  let ids = await listAllMessageIds(gmail);
   if (ids.length === 0) {
     console.log("No messages found in this Gmail account. Nothing to generate.");
     return;
+  }
+
+  if (options.limit && options.limit < ids.length) {
+    console.log(
+      `Limiting to the ${options.limit} most recent messages (of ${ids.length} total) as requested via --limit.`
+    );
+    ids = ids.slice(0, options.limit);
   }
 
   const fetchBar = new cliProgress.SingleBar({

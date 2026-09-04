@@ -80,11 +80,11 @@ export async function getMessages(
   ids: string[],
   onProgress?: (done: number, total: number) => void
 ): Promise<ParsedMessage[]> {
-  const limit = pLimit(3);
+  const concurrencyLimit = pLimit(3);
   let done = 0;
   const results = await Promise.all(
     ids.map((id) =>
-      limit(async () => {
+      concurrencyLimit(async () => {
         const msg = await getMessage(gmail, id);
         done += 1;
         onProgress?.(done, ids.length);
@@ -200,6 +200,39 @@ function saveCache(cache: Cache): void {
 }
 
 // ---------------------------------------------------------------------------
+// Proactive rate limiter
+// ---------------------------------------------------------------------------
+
+/**
+ * A simple sliding-window limiter shared across all Gmail API calls, so we
+ * self-throttle *before* hitting Google's per-user quota rather than only
+ * reacting to 429s after the fact. Conservative default (8 requests/sec =
+ * 480/min) stays comfortably under Gmail's default per-user budget even if
+ * each call costs several quota units; override with ROZE_GMAIL_RPS if you
+ * have a higher quota (e.g. after requesting an increase).
+ */
+function createRateLimiter(maxPerWindow: number, windowMs: number) {
+  const timestamps: number[] = [];
+  return async function acquire(): Promise<void> {
+    while (true) {
+      const now = Date.now();
+      while (timestamps.length && now - timestamps[0] >= windowMs) timestamps.shift();
+      if (timestamps.length < maxPerWindow) {
+        timestamps.push(now);
+        return;
+      }
+      const waitMs = windowMs - (now - timestamps[0]) + 5;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+  };
+}
+
+const acquireRateLimitSlot = createRateLimiter(
+  Number(process.env.ROZE_GMAIL_RPS ?? 8),
+  1000
+);
+
+// ---------------------------------------------------------------------------
 // Retry with exponential backoff on 429/403 rate-limit/quota errors and 5xx
 // ---------------------------------------------------------------------------
 
@@ -233,6 +266,7 @@ async function withRetry<T>(
   let attempt = 0;
   while (true) {
     try {
+      await acquireRateLimitSlot();
       return await fn();
     } catch (err) {
       attempt += 1;

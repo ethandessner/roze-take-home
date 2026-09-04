@@ -34,8 +34,16 @@ program
   .description(
     "Read your email history and generate the memory brain (people, projects, interests, open loops)."
   )
-  .action(async () => {
-    await runGenerate();
+  .option(
+    "--limit <n>",
+    "Only process the N most recent messages (useful for a quick test run on large mailboxes)"
+  )
+  .action(async (opts: { limit?: string }) => {
+    const limit = opts.limit ? Number(opts.limit) : undefined;
+    if (opts.limit && (!limit || limit <= 0)) {
+      throw new Error("--limit must be a positive number.");
+    }
+    await runGenerate({ limit });
   });
 
 program
