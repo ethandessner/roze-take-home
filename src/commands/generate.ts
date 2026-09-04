@@ -1,7 +1,13 @@
 import cliProgress from "cli-progress";
 import ora from "ora";
 import { getAuthedClient } from "../lib/auth.js";
-import { getGmailClient, listAllMessageIds, getMessages, groupByThread } from "../lib/gmail.js";
+import {
+  getGmailClient,
+  getMyEmailAddress,
+  listAllMessageIds,
+  getMessages,
+  groupByThread,
+} from "../lib/gmail.js";
 import { chunkThreads, renderThreadsForExtraction, latestDateInThreads } from "../lib/batching.js";
 import { extractFromBatch } from "../lib/extract.js";
 import {
@@ -25,6 +31,8 @@ export async function runGenerate(options: GenerateOptions = {}): Promise<void> 
   const gmail = getGmailClient(authClient);
 
   console.log("Reading your email history...");
+
+  const myEmail = await getMyEmailAddress(gmail).catch(() => null);
 
   let ids = await listAllMessageIds(gmail);
   if (ids.length === 0) {
@@ -64,9 +72,12 @@ export async function runGenerate(options: GenerateOptions = {}): Promise<void> 
     const batchText = renderThreadsForExtraction(batches[i]);
     const batchDate = latestDateInThreads(batches[i]);
     try {
-      const extraction = await extractFromBatch(batchText);
+      const extraction = await extractFromBatch(batchText, myEmail);
 
       for (const person of extraction.people) {
+        // Safety net in case the model still includes the account owner
+        // themselves despite the system prompt telling it not to.
+        if (myEmail && person.email?.trim().toLowerCase() === myEmail) continue;
         upsertPerson(person, batchDate);
         totals.people++;
       }

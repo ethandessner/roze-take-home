@@ -21,6 +21,15 @@ export function getGmailClient(authClient: OAuth2Client): gmail_v1.Gmail {
 }
 
 /**
+ * Returns the authenticated account's own email address, so extraction can
+ * exclude the user from being treated as one of their own "contacts".
+ */
+export async function getMyEmailAddress(gmail: gmail_v1.Gmail): Promise<string | null> {
+  const res = await withRetry(() => gmail.users.getProfile({ userId: "me" }));
+  return res.data.emailAddress?.toLowerCase() ?? null;
+}
+
+/**
  * Paginates through gmail.users.messages.list until there are no more
  * pages, returning every message id for the authenticated user.
  */

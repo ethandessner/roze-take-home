@@ -12,6 +12,7 @@ describe("formatBrainAsContext", () => {
           relationshipContext: "Coworker",
           lastInteractedAt: null,
           notes: null,
+          evidenceSnippet: null,
         },
       ],
       projects: [
@@ -22,6 +23,7 @@ describe("formatBrainAsContext", () => {
           status: "active",
           participants: ["Alice"],
           lastActivityAt: null,
+          evidenceSnippet: null,
         },
       ],
       interests: [
@@ -69,6 +71,7 @@ describe("formatBrainAsContext", () => {
           relationshipContext: null,
           lastInteractedAt: "2024-03-15T10:00:00.000Z",
           notes: null,
+          evidenceSnippet: null,
         },
       ],
       projects: [],
@@ -79,6 +82,40 @@ describe("formatBrainAsContext", () => {
 
     const text = formatBrainAsContext(brain);
     expect(text).toContain("last email evidence: 2024-03-15");
+  });
+
+  it("renders concrete evidence snippets for people and projects when present", () => {
+    const brain: Brain = {
+      people: [
+        {
+          id: 1,
+          name: "Carol",
+          email: null,
+          relationshipContext: "Client",
+          lastInteractedAt: null,
+          notes: null,
+          evidenceSnippet: "asked to move the kickoff to Thursday",
+        },
+      ],
+      projects: [
+        {
+          id: 1,
+          name: "Contract Renewal",
+          description: null,
+          status: "active",
+          participants: [],
+          lastActivityAt: null,
+          evidenceSnippet: "waiting on legal's redline before signing",
+        },
+      ],
+      interests: [],
+      openLoops: [],
+      meta: {},
+    };
+
+    const text = formatBrainAsContext(brain);
+    expect(text).toContain('evidence: "asked to move the kickoff to Thursday"');
+    expect(text).toContain('evidence: "waiting on legal\'s redline before signing"');
   });
 
   it("omits resolved open loops from the rendered context", () => {

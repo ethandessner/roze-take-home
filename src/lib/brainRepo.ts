@@ -11,6 +11,7 @@ export interface Person {
   relationshipContext: string | null;
   lastInteractedAt: string | null;
   notes: string | null;
+  evidenceSnippet: string | null;
 }
 
 export interface Project {
@@ -20,6 +21,7 @@ export interface Project {
   status: "active" | "completed" | "stalled";
   participants: string[];
   lastActivityAt: string | null;
+  evidenceSnippet: string | null;
 }
 
 export interface Interest {
@@ -55,6 +57,7 @@ export interface ExtractedPerson {
   email?: string | null;
   relationship_context?: string | null;
   notes?: string | null;
+  evidence_snippet?: string | null;
 }
 
 export interface ExtractedProject {
@@ -62,6 +65,7 @@ export interface ExtractedProject {
   description?: string | null;
   status?: "active" | "completed" | "stalled";
   participants?: string[];
+  evidence_snippet?: string | null;
 }
 
 export interface ExtractedInterest {
@@ -95,6 +99,21 @@ function maxDate(a: string | null | undefined, b: string | null | undefined): st
   return a > b ? a : b;
 }
 
+/**
+ * Keeps the evidence snippet associated with the most recent date we have.
+ * Falls back to whichever snippet is non-null if dates are missing/equal.
+ */
+function pickEvidence(
+  existingSnippet: string | null,
+  existingDate: string | null,
+  newSnippet: string | null | undefined,
+  newDate: string
+): string | null {
+  if (!newSnippet) return existingSnippet;
+  if (!existingDate || newDate >= existingDate) return newSnippet;
+  return existingSnippet;
+}
+
 export function upsertPerson(
   input: ExtractedPerson,
   /** Real date (ISO string) of the email evidence this came from, if known. */
@@ -120,18 +139,25 @@ export function upsertPerson(
       input.relationship_context
     );
     const lastInteractedAt = maxDate(existing.last_interacted_at, eventDate);
+    const evidenceSnippet = pickEvidence(
+      existing.evidence_snippet,
+      existing.last_interacted_at,
+      input.evidence_snippet,
+      eventDate
+    );
     db.prepare(
-      `UPDATE people SET relationship_context = ?, notes = ?, last_interacted_at = ?, updated_at = datetime('now'), email = coalesce(email, ?) WHERE id = ?`
-    ).run(mergedContext, mergedNotes, lastInteractedAt, email, existing.id);
+      `UPDATE people SET relationship_context = ?, notes = ?, last_interacted_at = ?, evidence_snippet = ?, updated_at = datetime('now'), email = coalesce(email, ?) WHERE id = ?`
+    ).run(mergedContext, mergedNotes, lastInteractedAt, evidenceSnippet, email, existing.id);
   } else {
     db.prepare(
-      `INSERT INTO people (name, email, relationship_context, notes, last_interacted_at) VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO people (name, email, relationship_context, notes, last_interacted_at, evidence_snippet) VALUES (?, ?, ?, ?, ?, ?)`
     ).run(
       input.name.trim(),
       email,
       input.relationship_context ?? null,
       input.notes ?? null,
-      eventDate
+      eventDate,
+      input.evidence_snippet ?? null
     );
   }
 }
@@ -159,24 +185,32 @@ export function upsertProject(
         ? input.description
         : existing.description;
     const lastActivityAt = maxDate(existing.last_activity_at, eventDate);
+    const evidenceSnippet = pickEvidence(
+      existing.evidence_snippet,
+      existing.last_activity_at,
+      input.evidence_snippet,
+      eventDate
+    );
     db.prepare(
-      `UPDATE projects SET description = ?, status = ?, participants = ?, last_activity_at = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE projects SET description = ?, status = ?, participants = ?, last_activity_at = ?, evidence_snippet = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(
       description ?? null,
       input.status ?? existing.status,
       JSON.stringify(mergedParticipants),
       lastActivityAt,
+      evidenceSnippet,
       existing.id
     );
   } else {
     db.prepare(
-      `INSERT INTO projects (name, description, status, participants, last_activity_at) VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO projects (name, description, status, participants, last_activity_at, evidence_snippet) VALUES (?, ?, ?, ?, ?, ?)`
     ).run(
       input.name.trim(),
       input.description ?? null,
       input.status ?? "active",
       JSON.stringify(incomingParticipants),
-      eventDate
+      eventDate,
+      input.evidence_snippet ?? null
     );
   }
 }
@@ -260,6 +294,7 @@ export function loadFullBrain(): Brain {
       relationshipContext: r.relationship_context,
       lastInteractedAt: r.last_interacted_at,
       notes: r.notes,
+      evidenceSnippet: r.evidence_snippet,
     })
   );
 
@@ -273,6 +308,7 @@ export function loadFullBrain(): Brain {
       status: r.status,
       participants: JSON.parse(r.participants),
       lastActivityAt: r.last_activity_at,
+      evidenceSnippet: r.evidence_snippet,
     })
   );
 
@@ -329,7 +365,9 @@ export function formatBrainAsContext(brain: Brain): string {
     lines.push(
       `- ${p.name}${p.email ? ` <${p.email}>` : ""}: ${p.relationshipContext ?? "no context"}${
         p.notes ? ` | notes: ${p.notes}` : ""
-      }${p.lastInteractedAt ? ` | last email evidence: ${toDateOnly(p.lastInteractedAt)}` : ""}`
+      }${p.evidenceSnippet ? ` | evidence: "${p.evidenceSnippet}"` : ""}${
+        p.lastInteractedAt ? ` | last email evidence: ${toDateOnly(p.lastInteractedAt)}` : ""
+      }`
     );
   }
 
@@ -339,7 +377,9 @@ export function formatBrainAsContext(brain: Brain): string {
     lines.push(
       `- ${p.name} [${p.status}]: ${p.description ?? "no description"}${
         p.participants.length ? ` | participants: ${p.participants.join(", ")}` : ""
-      }${p.lastActivityAt ? ` | last email evidence: ${toDateOnly(p.lastActivityAt)}` : ""}`
+      }${p.evidenceSnippet ? ` | evidence: "${p.evidenceSnippet}"` : ""}${
+        p.lastActivityAt ? ` | last email evidence: ${toDateOnly(p.lastActivityAt)}` : ""
+      }`
     );
   }
 
@@ -393,6 +433,7 @@ interface PersonRow {
   relationship_context: string | null;
   last_interacted_at: string | null;
   notes: string | null;
+  evidence_snippet: string | null;
 }
 
 interface ProjectRow {
@@ -402,6 +443,7 @@ interface ProjectRow {
   status: Project["status"];
   participants: string;
   last_activity_at: string | null;
+  evidence_snippet: string | null;
 }
 
 interface InterestRow {

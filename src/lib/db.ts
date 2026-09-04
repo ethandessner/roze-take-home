@@ -38,6 +38,7 @@ function migrate(database: Database.Database): void {
       relationship_context TEXT,
       last_interacted_at TEXT,
       notes TEXT,
+      evidence_snippet TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -49,6 +50,7 @@ function migrate(database: Database.Database): void {
       status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed','stalled')),
       participants TEXT NOT NULL DEFAULT '[]',
       last_activity_at TEXT,
+      evidence_snippet TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -85,4 +87,22 @@ function migrate(database: Database.Database): void {
       value TEXT NOT NULL
     );
   `);
+
+  // Lightweight migration for DBs created before evidence_snippet existed.
+  addColumnIfMissing(database, "people", "evidence_snippet", "TEXT");
+  addColumnIfMissing(database, "projects", "evidence_snippet", "TEXT");
+}
+
+function addColumnIfMissing(
+  database: Database.Database,
+  table: string,
+  column: string,
+  type: string
+): void {
+  const columns = database.prepare(`PRAGMA table_info(${table})`).all() as {
+    name: string;
+  }[];
+  if (!columns.some((c) => c.name === column)) {
+    database.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
 }
