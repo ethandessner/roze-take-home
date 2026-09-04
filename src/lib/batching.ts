@@ -35,10 +35,9 @@ export function renderThreadsForExtraction(threads: ParsedMessage[][]): string {
 
 /**
  * The most recent message date found anywhere in a batch of threads, as an
- * ISO string. Used as a (necessarily approximate) "last interacted"/"last
- * activity" timestamp for entities extracted from that batch, since the
- * extraction step doesn't map individual facts back to individual message
- * dates.
+ * ISO string. Used as a coarse, batch-level fallback "last activity"
+ * timestamp for entities (like projects) that can't be reliably tied back
+ * to a specific counterparty's messages.
  */
 export function latestDateInThreads(threads: ParsedMessage[][]): string | null {
   let latest: number | null = null;
@@ -49,4 +48,38 @@ export function latestDateInThreads(threads: ParsedMessage[][]): string | null {
     }
   }
   return latest === null ? null : new Date(latest).toISOString();
+}
+
+const EMAIL_PATTERN = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+
+function extractEmails(headerValue: string): string[] {
+  return (headerValue.match(EMAIL_PATTERN) ?? []).map((e) => e.toLowerCase());
+}
+
+/**
+ * Maps each email address seen in From/To headers within this batch to the
+ * latest message date on which they actually appear as a sender or
+ * recipient - i.e. a genuine "interaction", not just co-occurrence in the
+ * same batch of threads.
+ */
+export function computeLastInteractionByEmail(
+  threads: ParsedMessage[][]
+): Map<string, string> {
+  const lastByEmail = new Map<string, number>();
+
+  for (const thread of threads) {
+    for (const msg of thread) {
+      const t = Date.parse(msg.date || "");
+      if (Number.isNaN(t)) continue;
+      const participants = new Set([...extractEmails(msg.from), ...extractEmails(msg.to)]);
+      for (const email of participants) {
+        const prev = lastByEmail.get(email);
+        if (prev === undefined || t > prev) lastByEmail.set(email, t);
+      }
+    }
+  }
+
+  return new Map(
+    Array.from(lastByEmail.entries()).map(([email, t]) => [email, new Date(t).toISOString()])
+  );
 }

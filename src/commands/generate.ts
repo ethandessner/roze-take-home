@@ -8,7 +8,12 @@ import {
   getMessages,
   groupByThread,
 } from "../lib/gmail.js";
-import { chunkThreads, renderThreadsForExtraction, latestDateInThreads } from "../lib/batching.js";
+import {
+  chunkThreads,
+  renderThreadsForExtraction,
+  latestDateInThreads,
+  computeLastInteractionByEmail,
+} from "../lib/batching.js";
 import { extractFromBatch } from "../lib/extract.js";
 import {
   upsertPerson,
@@ -71,6 +76,7 @@ export async function runGenerate(options: GenerateOptions = {}): Promise<void> 
 
     const batchText = renderThreadsForExtraction(batches[i]);
     const batchDate = latestDateInThreads(batches[i]);
+    const lastInteractionByEmail = computeLastInteractionByEmail(batches[i]);
     try {
       const extraction = await extractFromBatch(batchText, myEmail);
 
@@ -78,7 +84,16 @@ export async function runGenerate(options: GenerateOptions = {}): Promise<void> 
         // Safety net in case the model still includes the account owner
         // themselves despite the system prompt telling it not to.
         if (myEmail && person.email?.trim().toLowerCase() === myEmail) continue;
-        upsertPerson(person, batchDate);
+
+        // A real "interaction" date: the latest message where this person
+        // actually appears as a sender/recipient, not just the newest email
+        // anywhere in the batch. Falls back to the batch date only if we
+        // don't have their email to match against.
+        const personDate = person.email
+          ? lastInteractionByEmail.get(person.email.trim().toLowerCase()) ?? batchDate
+          : batchDate;
+
+        upsertPerson(person, personDate);
         totals.people++;
       }
       for (const project of extraction.projects) {
