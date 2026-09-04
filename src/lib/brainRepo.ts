@@ -1,0 +1,392 @@
+import { getDb } from "./db.js";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface Person {
+  id: number;
+  name: string;
+  email: string | null;
+  relationshipContext: string | null;
+  lastInteractedAt: string | null;
+  notes: string | null;
+}
+
+export interface Project {
+  id: number;
+  name: string;
+  description: string | null;
+  status: "active" | "completed" | "stalled";
+  participants: string[];
+  lastActivityAt: string | null;
+}
+
+export interface Interest {
+  id: number;
+  topic: string;
+  category: "organization" | "tool" | "hobby" | "subject" | "other";
+  evidenceSnippet: string | null;
+  frequencyScore: number;
+}
+
+export interface OpenLoop {
+  id: number;
+  description: string;
+  status: "open" | "resolved";
+  owner: string | null;
+  relatedPeople: string[];
+  relatedProjectId: number | null;
+  dueHint: string | null;
+  sourceThreadId: string | null;
+}
+
+export interface Brain {
+  people: Person[];
+  projects: Project[];
+  interests: Interest[];
+  openLoops: OpenLoop[];
+  meta: Record<string, string>;
+}
+
+// Shapes coming out of the LLM extraction step (see src/commands/generate.ts).
+export interface ExtractedPerson {
+  name: string;
+  email?: string | null;
+  relationship_context?: string | null;
+  notes?: string | null;
+}
+
+export interface ExtractedProject {
+  name: string;
+  description?: string | null;
+  status?: "active" | "completed" | "stalled";
+  participants?: string[];
+}
+
+export interface ExtractedInterest {
+  topic: string;
+  category?: Interest["category"];
+  evidence_snippet?: string | null;
+}
+
+export interface ExtractedOpenLoop {
+  description: string;
+  status?: "open" | "resolved";
+  owner?: string | null;
+  related_people?: string[];
+  due_hint?: string | null;
+  source_thread_id?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Upsert / merge functions
+// ---------------------------------------------------------------------------
+
+export function upsertPerson(input: ExtractedPerson): void {
+  if (!input.name?.trim()) return;
+  const db = getDb();
+  const email = input.email?.trim().toLowerCase() || null;
+
+  const existing = email
+    ? (db
+        .prepare(`SELECT * FROM people WHERE lower(email) = ?`)
+        .get(email) as PersonRow | undefined)
+    : (db
+        .prepare(`SELECT * FROM people WHERE lower(name) = ?`)
+        .get(input.name.trim().toLowerCase()) as PersonRow | undefined);
+
+  if (existing) {
+    const mergedNotes = mergeText(existing.notes, input.notes);
+    const mergedContext = mergeText(
+      existing.relationship_context,
+      input.relationship_context
+    );
+    db.prepare(
+      `UPDATE people SET relationship_context = ?, notes = ?, last_interacted_at = datetime('now'), updated_at = datetime('now'), email = coalesce(email, ?) WHERE id = ?`
+    ).run(mergedContext, mergedNotes, email, existing.id);
+  } else {
+    db.prepare(
+      `INSERT INTO people (name, email, relationship_context, notes, last_interacted_at) VALUES (?, ?, ?, ?, datetime('now'))`
+    ).run(
+      input.name.trim(),
+      email,
+      input.relationship_context ?? null,
+      input.notes ?? null
+    );
+  }
+}
+
+export function upsertProject(input: ExtractedProject): void {
+  if (!input.name?.trim()) return;
+  const db = getDb();
+  const existing = db
+    .prepare(`SELECT * FROM projects WHERE lower(name) = ?`)
+    .get(input.name.trim().toLowerCase()) as ProjectRow | undefined;
+
+  const incomingParticipants = input.participants ?? [];
+
+  if (existing) {
+    const mergedParticipants = Array.from(
+      new Set([...JSON.parse(existing.participants), ...incomingParticipants])
+    );
+    const description =
+      (input.description?.length ?? 0) > (existing.description?.length ?? 0)
+        ? input.description
+        : existing.description;
+    db.prepare(
+      `UPDATE projects SET description = ?, status = ?, participants = ?, last_activity_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`
+    ).run(
+      description ?? null,
+      input.status ?? existing.status,
+      JSON.stringify(mergedParticipants),
+      existing.id
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO projects (name, description, status, participants, last_activity_at) VALUES (?, ?, ?, ?, datetime('now'))`
+    ).run(
+      input.name.trim(),
+      input.description ?? null,
+      input.status ?? "active",
+      JSON.stringify(incomingParticipants)
+    );
+  }
+}
+
+export function upsertInterest(input: ExtractedInterest): void {
+  if (!input.topic?.trim()) return;
+  const db = getDb();
+  const existing = db
+    .prepare(`SELECT * FROM interests WHERE lower(topic) = ?`)
+    .get(input.topic.trim().toLowerCase()) as InterestRow | undefined;
+
+  if (existing) {
+    db.prepare(
+      `UPDATE interests SET frequency_score = frequency_score + 1, evidence_snippet = coalesce(evidence_snippet, ?), updated_at = datetime('now') WHERE id = ?`
+    ).run(input.evidence_snippet ?? null, existing.id);
+  } else {
+    db.prepare(
+      `INSERT INTO interests (topic, category, evidence_snippet, frequency_score) VALUES (?, ?, ?, 1)`
+    ).run(
+      input.topic.trim(),
+      input.category ?? "other",
+      input.evidence_snippet ?? null
+    );
+  }
+}
+
+export function insertOpenLoop(input: ExtractedOpenLoop): void {
+  if (!input.description?.trim()) return;
+  const db = getDb();
+
+  const duplicate = db
+    .prepare(
+      `SELECT id FROM open_loops WHERE status = 'open' AND lower(description) = ?`
+    )
+    .get(input.description.trim().toLowerCase());
+  if (duplicate) return;
+
+  db.prepare(
+    `INSERT INTO open_loops (description, status, owner, related_people, due_hint, source_thread_id) VALUES (?, ?, ?, ?, ?, ?)`
+  ).run(
+    input.description.trim(),
+    input.status ?? "open",
+    input.owner ?? null,
+    JSON.stringify(input.related_people ?? []),
+    input.due_hint ?? null,
+    input.source_thread_id ?? null
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Meta
+// ---------------------------------------------------------------------------
+
+export function setMeta(key: string, value: string): void {
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(key, value);
+}
+
+export function getMeta(key: string): string | undefined {
+  const db = getDb();
+  const row = db.prepare(`SELECT value FROM meta WHERE key = ?`).get(key) as
+    | { value: string }
+    | undefined;
+  return row?.value;
+}
+
+// ---------------------------------------------------------------------------
+// Loading / formatting the full brain
+// ---------------------------------------------------------------------------
+
+export function loadFullBrain(): Brain {
+  const db = getDb();
+
+  const people = (db.prepare(`SELECT * FROM people ORDER BY name`).all() as PersonRow[]).map(
+    (r): Person => ({
+      id: r.id,
+      name: r.name,
+      email: r.email,
+      relationshipContext: r.relationship_context,
+      lastInteractedAt: r.last_interacted_at,
+      notes: r.notes,
+    })
+  );
+
+  const projects = (
+    db.prepare(`SELECT * FROM projects ORDER BY name`).all() as ProjectRow[]
+  ).map(
+    (r): Project => ({
+      id: r.id,
+      name: r.name,
+      description: r.description,
+      status: r.status,
+      participants: JSON.parse(r.participants),
+      lastActivityAt: r.last_activity_at,
+    })
+  );
+
+  const interests = (
+    db
+      .prepare(`SELECT * FROM interests ORDER BY frequency_score DESC, topic`)
+      .all() as InterestRow[]
+  ).map(
+    (r): Interest => ({
+      id: r.id,
+      topic: r.topic,
+      category: r.category,
+      evidenceSnippet: r.evidence_snippet,
+      frequencyScore: r.frequency_score,
+    })
+  );
+
+  const openLoops = (
+    db
+      .prepare(`SELECT * FROM open_loops ORDER BY status, created_at DESC`)
+      .all() as OpenLoopRow[]
+  ).map(
+    (r): OpenLoop => ({
+      id: r.id,
+      description: r.description,
+      status: r.status,
+      owner: r.owner,
+      relatedPeople: JSON.parse(r.related_people),
+      relatedProjectId: r.related_project_id,
+      dueHint: r.due_hint,
+      sourceThreadId: r.source_thread_id,
+    })
+  );
+
+  const metaRows = db.prepare(`SELECT key, value FROM meta`).all() as {
+    key: string;
+    value: string;
+  }[];
+  const meta = Object.fromEntries(metaRows.map((r) => [r.key, r.value]));
+
+  return { people, projects, interests, openLoops, meta };
+}
+
+/**
+ * Renders the brain as a compact, well-labeled text block suitable for
+ * inclusion in an LLM prompt.
+ */
+export function formatBrainAsContext(brain: Brain): string {
+  const lines: string[] = [];
+
+  lines.push("## People");
+  if (brain.people.length === 0) lines.push("(none)");
+  for (const p of brain.people) {
+    lines.push(
+      `- ${p.name}${p.email ? ` <${p.email}>` : ""}: ${p.relationshipContext ?? "no context"}${
+        p.notes ? ` | notes: ${p.notes}` : ""
+      }`
+    );
+  }
+
+  lines.push("\n## Projects");
+  if (brain.projects.length === 0) lines.push("(none)");
+  for (const p of brain.projects) {
+    lines.push(
+      `- ${p.name} [${p.status}]: ${p.description ?? "no description"}${
+        p.participants.length ? ` | participants: ${p.participants.join(", ")}` : ""
+      }`
+    );
+  }
+
+  lines.push("\n## Interests");
+  if (brain.interests.length === 0) lines.push("(none)");
+  for (const i of brain.interests) {
+    lines.push(
+      `- ${i.topic} (${i.category}, mentioned ${i.frequencyScore}x)${
+        i.evidenceSnippet ? ` | e.g. "${i.evidenceSnippet}"` : ""
+      }`
+    );
+  }
+
+  lines.push("\n## Open Loops");
+  const openOnly = brain.openLoops.filter((o) => o.status === "open");
+  if (openOnly.length === 0) lines.push("(none)");
+  for (const o of openOnly) {
+    lines.push(
+      `- ${o.description}${o.owner ? ` | owner: ${o.owner}` : ""}${
+        o.dueHint ? ` | due: ${o.dueHint}` : ""
+      }${o.relatedPeople.length ? ` | people: ${o.relatedPeople.join(", ")}` : ""}`
+    );
+  }
+
+  return lines.join("\n");
+}
+
+function mergeText(
+  existing: string | null | undefined,
+  incoming: string | null | undefined
+): string | null {
+  if (!incoming?.trim()) return existing ?? null;
+  if (!existing?.trim()) return incoming.trim();
+  if (existing.toLowerCase().includes(incoming.trim().toLowerCase())) return existing;
+  return `${existing}; ${incoming.trim()}`;
+}
+
+// ---------------------------------------------------------------------------
+// Raw row shapes
+// ---------------------------------------------------------------------------
+
+interface PersonRow {
+  id: number;
+  name: string;
+  email: string | null;
+  relationship_context: string | null;
+  last_interacted_at: string | null;
+  notes: string | null;
+}
+
+interface ProjectRow {
+  id: number;
+  name: string;
+  description: string | null;
+  status: Project["status"];
+  participants: string;
+  last_activity_at: string | null;
+}
+
+interface InterestRow {
+  id: number;
+  topic: string;
+  category: Interest["category"];
+  evidence_snippet: string | null;
+  frequency_score: number;
+}
+
+interface OpenLoopRow {
+  id: number;
+  description: string;
+  status: OpenLoop["status"];
+  owner: string | null;
+  related_people: string;
+  related_project_id: number | null;
+  due_hint: string | null;
+  source_thread_id: string | null;
+}

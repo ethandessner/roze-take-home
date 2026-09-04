@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+*.log
+.DS_Store
+
+# Local application state must never live in the repo, but ignore defensively
+# in case something writes here by mistake during development.
+.roze/
