@@ -72,7 +72,11 @@ function waitForOAuthCode(authUrl: string): Promise<string> {
       const code = url.searchParams.get("code");
       const error = url.searchParams.get("error");
 
-      res.writeHead(200, { "Content-Type": "text/html" });
+      // Tell the browser not to keep this connection alive. Without this,
+      // Chrome/Safari often hold the socket open for reuse, and that open
+      // keep-alive socket keeps the Node process running even after
+      // server.close() below - the CLI would hang until Ctrl+C.
+      res.writeHead(200, { "Content-Type": "text/html", Connection: "close" });
       if (error) {
         res.end(
           `<html><body><h2>Authentication failed: ${error}</h2>You can close this tab.</body></html>`
@@ -83,7 +87,18 @@ function waitForOAuthCode(authUrl: string): Promise<string> {
         );
       }
 
-      server.close();
+      // Wait until the response has actually been flushed before tearing
+      // down sockets. Calling closeAllConnections() synchronously right
+      // after res.end() can destroy the socket before the browser has
+      // received the page, cutting the response short. Once "finish"
+      // fires, it's safe to stop the server and forcefully close any
+      // remaining sockets (e.g. the browser's keep-alive connection, or a
+      // stray /favicon.ico request reusing it) so the CLI process can exit
+      // on its own instead of hanging until Ctrl+C.
+      res.on("finish", () => {
+        server.close();
+        server.closeAllConnections();
+      });
 
       if (error || !code) {
         reject(new Error(`OAuth error: ${error ?? "no code returned"}`));
