@@ -66,7 +66,7 @@ export async function getMessage(
   gmail: gmail_v1.Gmail,
   id: string
 ): Promise<ParsedMessage> {
-  const cache = loadCache();
+  const cache = getCache();
   const cached = cache[id];
   if (cached) return cached;
 
@@ -76,7 +76,7 @@ export async function getMessage(
 
   const parsed = parseMessage(res.data);
   cache[id] = parsed;
-  saveCache(cache);
+  markCacheDirty();
   return parsed;
 }
 
@@ -91,17 +91,23 @@ export async function getMessages(
 ): Promise<ParsedMessage[]> {
   const concurrencyLimit = pLimit(3);
   let done = 0;
-  const results = await Promise.all(
-    ids.map((id) =>
-      concurrencyLimit(async () => {
-        const msg = await getMessage(gmail, id);
-        done += 1;
-        onProgress?.(done, ids.length);
-        return msg;
-      })
-    )
-  );
-  return results;
+  try {
+    const results = await Promise.all(
+      ids.map((id) =>
+        concurrencyLimit(async () => {
+          const msg = await getMessage(gmail, id);
+          done += 1;
+          onProgress?.(done, ids.length);
+          return msg;
+        })
+      )
+    );
+    return results;
+  } finally {
+    // Persist whatever was fetched, including on failure or interruption, so
+    // a re-run doesn't have to re-download it.
+    flushCache();
+  }
 }
 
 export function groupByThread(messages: ParsedMessage[]): ThreadMap {
@@ -206,6 +212,33 @@ function loadCache(): Cache {
 function saveCache(cache: Cache): void {
   ensureRozeDir();
   writeFileSync(GMAIL_CACHE_PATH, JSON.stringify(cache));
+}
+
+// The cache is held in memory for the life of the process. It used to be
+// re-read and re-written from disk on every single message, which meant each
+// fetch paid a full parse + serialize of the entire (multi-megabyte and
+// growing) cache file - O(n^2) I/O that dominated the runtime of a full
+// mailbox fetch and completely swamped the actual network time.
+let cacheRef: Cache | null = null;
+let dirtyEntries = 0;
+
+/** Flush after this many new messages, bounding work lost to an interrupt. */
+const CACHE_FLUSH_INTERVAL = 50;
+
+function getCache(): Cache {
+  if (!cacheRef) cacheRef = loadCache();
+  return cacheRef;
+}
+
+function markCacheDirty(): void {
+  dirtyEntries += 1;
+  if (dirtyEntries >= CACHE_FLUSH_INTERVAL) flushCache();
+}
+
+function flushCache(): void {
+  if (!cacheRef || dirtyEntries === 0) return;
+  saveCache(cacheRef);
+  dirtyEntries = 0;
 }
 
 // ---------------------------------------------------------------------------

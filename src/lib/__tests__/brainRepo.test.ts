@@ -6,6 +6,8 @@ import {
   upsertInterest,
   upsertPerson,
   upsertProject,
+  resolveOpenLoopById,
+  closeProjectById,
 } from "../brainRepo.js";
 
 beforeEach(() => {
@@ -58,6 +60,32 @@ describe("upsertProject", () => {
       "bob@example.com",
     ]);
   });
+
+  it("records the outcome when a project ends", () => {
+    upsertProject({ name: "July Take Home", status: "active" });
+    upsertProject({
+      name: "july take home",
+      status: "cancelled",
+      outcome: "July moved forward with other candidates (Wells, Aug 25)",
+    });
+
+    const brain = loadFullBrain();
+    expect(brain.projects[0].status).toBe("cancelled");
+    expect(brain.projects[0].outcome).toContain("other candidates");
+  });
+
+  it("does not revive a terminal project when an out-of-order batch still sees it active", () => {
+    upsertProject({
+      name: "July Take Home",
+      status: "cancelled",
+      outcome: "Rejected on Aug 25",
+    });
+    upsertProject({ name: "july take home", status: "active" });
+
+    const brain = loadFullBrain();
+    expect(brain.projects[0].status).toBe("cancelled");
+    expect(brain.projects[0].outcome).toBe("Rejected on Aug 25");
+  });
 });
 
 describe("upsertInterest", () => {
@@ -96,5 +124,63 @@ describe("upsertOpenLoop", () => {
     const brain = loadFullBrain();
     expect(brain.openLoops).toHaveLength(1);
     expect(brain.openLoops[0].status).toBe("resolved");
+  });
+
+  it("stores why a loop was resolved", () => {
+    upsertOpenLoop({ description: "Push final changes", status: "open" });
+    upsertOpenLoop({
+      description: "push final changes",
+      status: "resolved",
+      resolution_reason: "moot: candidacy rejected Aug 25",
+    });
+
+    const brain = loadFullBrain();
+    expect(brain.openLoops[0].resolutionReason).toBe("moot: candidacy rejected Aug 25");
+  });
+});
+
+// The reconciliation pass exists because each extraction batch is analyzed in
+// isolation, so a loop created from one thread is never closed by a
+// resolution that appeared in a different batch.
+describe("reconciliation writes", () => {
+  it("closes a stale open loop and reports that it changed something", () => {
+    upsertOpenLoop({ description: "Push final changes", status: "open" });
+    const id = loadFullBrain().openLoops[0].id;
+
+    expect(resolveOpenLoopById(id, "moot: candidacy rejected")).toBe(true);
+
+    const brain = loadFullBrain();
+    expect(brain.openLoops[0].status).toBe("resolved");
+    expect(brain.openLoops[0].resolutionReason).toBe("moot: candidacy rejected");
+  });
+
+  it("reports no change when the loop was already resolved", () => {
+    upsertOpenLoop({ description: "Push final changes", status: "resolved" });
+    const id = loadFullBrain().openLoops[0].id;
+
+    expect(resolveOpenLoopById(id, "some other reason")).toBe(false);
+  });
+
+  it("closes an active project with an outcome", () => {
+    upsertProject({ name: "July Take Home", status: "active" });
+    const id = loadFullBrain().projects[0].id;
+
+    expect(closeProjectById(id, "cancelled", "Rejected Aug 25")).toBe(true);
+
+    const brain = loadFullBrain();
+    expect(brain.projects[0].status).toBe("cancelled");
+    expect(brain.projects[0].outcome).toBe("Rejected Aug 25");
+  });
+
+  it("won't overwrite a project that already reached a terminal state", () => {
+    upsertProject({
+      name: "July Take Home",
+      status: "completed",
+      outcome: "Shipped it",
+    });
+    const id = loadFullBrain().projects[0].id;
+
+    expect(closeProjectById(id, "cancelled", "Rejected Aug 25")).toBe(false);
+    expect(loadFullBrain().projects[0].outcome).toBe("Shipped it");
   });
 });

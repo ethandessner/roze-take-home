@@ -47,10 +47,11 @@ function migrate(database: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       description TEXT,
-      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed','stalled')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed','stalled','cancelled')),
       participants TEXT NOT NULL DEFAULT '[]',
       last_activity_at TEXT,
       evidence_snippet TEXT,
+      outcome TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -73,6 +74,7 @@ function migrate(database: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       description TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
+      resolution_reason TEXT,
       owner TEXT,
       related_people TEXT NOT NULL DEFAULT '[]',
       due_hint TEXT,
@@ -91,6 +93,44 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, "people", "evidence_snippet", "TEXT");
   addColumnIfMissing(database, "projects", "evidence_snippet", "TEXT");
   addColumnIfMissing(database, "interests", "evidence_snippet", "TEXT");
+
+  // Added alongside outcome-aware extraction.
+  addColumnIfMissing(database, "projects", "outcome", "TEXT");
+  addColumnIfMissing(database, "open_loops", "resolution_reason", "TEXT");
+
+  // 'cancelled' was added to the projects status CHECK later. A CHECK
+  // constraint can't be altered in place in SQLite, so an older database
+  // would reject cancelled projects outright - rebuild the table instead.
+  allowCancelledProjectStatus(database);
+}
+
+function allowCancelledProjectStatus(database: Database.Database): void {
+  const row = database
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'projects'`)
+    .get() as { sql: string } | undefined;
+  if (!row || row.sql.includes("'cancelled'")) return;
+
+  database.exec(`
+    BEGIN;
+    CREATE TABLE projects_migrated (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed','stalled','cancelled')),
+      participants TEXT NOT NULL DEFAULT '[]',
+      last_activity_at TEXT,
+      evidence_snippet TEXT,
+      outcome TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO projects_migrated (id, name, description, status, participants, last_activity_at, evidence_snippet, outcome, created_at, updated_at)
+      SELECT id, name, description, status, participants, last_activity_at, evidence_snippet, outcome, created_at, updated_at FROM projects;
+    DROP TABLE projects;
+    ALTER TABLE projects_migrated RENAME TO projects;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name_ci ON projects (name COLLATE NOCASE);
+    COMMIT;
+  `);
 }
 
 function addColumnIfMissing(

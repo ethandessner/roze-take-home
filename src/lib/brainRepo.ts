@@ -14,14 +14,21 @@ export interface Person {
   evidenceSnippet: string | null;
 }
 
+export type ProjectStatus = "active" | "completed" | "stalled" | "cancelled";
+
+/** Statuses that mean the effort is over, one way or the other. */
+const TERMINAL_PROJECT_STATUSES: ProjectStatus[] = ["completed", "cancelled"];
+
 export interface Project {
   id: number;
   name: string;
   description: string | null;
-  status: "active" | "completed" | "stalled";
+  status: ProjectStatus;
   participants: string[];
   lastActivityAt: string | null;
   evidenceSnippet: string | null;
+  /** How and why the project ended, when it has ended. */
+  outcome: string | null;
 }
 
 export interface Interest {
@@ -36,6 +43,8 @@ export interface OpenLoop {
   id: number;
   description: string;
   status: "open" | "resolved";
+  /** Why the loop is no longer outstanding, when it has been resolved. */
+  resolutionReason: string | null;
   owner: string | null;
   relatedPeople: string[];
   dueHint: string | null;
@@ -62,9 +71,10 @@ export interface ExtractedPerson {
 export interface ExtractedProject {
   name: string;
   description?: string | null;
-  status?: "active" | "completed" | "stalled";
+  status?: ProjectStatus;
   participants?: string[];
   evidence_snippet?: string | null;
+  outcome?: string | null;
 }
 
 export interface ExtractedInterest {
@@ -76,6 +86,7 @@ export interface ExtractedInterest {
 export interface ExtractedOpenLoop {
   description: string;
   status?: "open" | "resolved";
+  resolution_reason?: string | null;
   owner?: string | null;
   related_people?: string[];
   due_hint?: string | null;
@@ -190,26 +201,41 @@ export function upsertProject(
       input.evidence_snippet,
       eventDate
     );
+    // Batches aren't processed in global chronological order, so treat a
+    // terminal status as sticky the same way "resolved" is for open loops:
+    // once we've seen evidence a project ended, an older batch that still
+    // thought it was active must not revive it.
+    const incomingStatus = input.status ?? existing.status;
+    const status = TERMINAL_PROJECT_STATUSES.includes(existing.status)
+      ? existing.status
+      : incomingStatus;
+    // Keep whichever outcome explains the terminal state we settled on.
+    const outcome = TERMINAL_PROJECT_STATUSES.includes(existing.status)
+      ? existing.outcome ?? input.outcome ?? null
+      : input.outcome ?? existing.outcome ?? null;
+
     db.prepare(
-      `UPDATE projects SET description = ?, status = ?, participants = ?, last_activity_at = ?, evidence_snippet = ?, updated_at = datetime('now') WHERE id = ?`
+      `UPDATE projects SET description = ?, status = ?, participants = ?, last_activity_at = ?, evidence_snippet = ?, outcome = ?, updated_at = datetime('now') WHERE id = ?`
     ).run(
       description ?? null,
-      input.status ?? existing.status,
+      status,
       JSON.stringify(mergedParticipants),
       lastActivityAt,
       evidenceSnippet,
+      outcome,
       existing.id
     );
   } else {
     db.prepare(
-      `INSERT INTO projects (name, description, status, participants, last_activity_at, evidence_snippet) VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO projects (name, description, status, participants, last_activity_at, evidence_snippet, outcome) VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
       input.name.trim(),
       input.description ?? null,
       input.status ?? "active",
       JSON.stringify(incomingParticipants),
       eventDate,
-      input.evidence_snippet ?? null
+      input.evidence_snippet ?? null,
+      input.outcome ?? null
     );
   }
 }
@@ -254,22 +280,60 @@ export function upsertOpenLoop(input: ExtractedOpenLoop): void {
     // reopen something we already know was resolved.
     if (existing.status === "open" && incomingStatus === "resolved") {
       db.prepare(
-        `UPDATE open_loops SET status = 'resolved', updated_at = datetime('now') WHERE id = ?`
-      ).run(existing.id);
+        `UPDATE open_loops SET status = 'resolved', resolution_reason = ?, updated_at = datetime('now') WHERE id = ?`
+      ).run(input.resolution_reason ?? null, existing.id);
     }
     return;
   }
 
   db.prepare(
-    `INSERT INTO open_loops (description, status, owner, related_people, due_hint, source_thread_id) VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO open_loops (description, status, resolution_reason, owner, related_people, due_hint, source_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
     input.description.trim(),
     incomingStatus,
+    incomingStatus === "resolved" ? input.resolution_reason ?? null : null,
     input.owner ?? null,
     JSON.stringify(input.related_people ?? []),
     input.due_hint ?? null,
     input.source_thread_id ?? null
   );
+}
+
+// ---------------------------------------------------------------------------
+// Reconciliation writes (see reconcileBrain in extract.ts)
+// ---------------------------------------------------------------------------
+
+/**
+ * Closes an open loop that the reconciliation pass found to be settled or
+ * moot. Returns true if a still-open loop was actually closed, so callers
+ * can report how much the pass changed.
+ */
+export function resolveOpenLoopById(id: number, reason: string): boolean {
+  const db = getDb();
+  const result = db
+    .prepare(
+      `UPDATE open_loops SET status = 'resolved', resolution_reason = ?, updated_at = datetime('now') WHERE id = ? AND status = 'open'`
+    )
+    .run(reason, id);
+  return result.changes > 0;
+}
+
+/**
+ * Marks a project as having reached a terminal state, recording how it
+ * ended. Won't overwrite a project that is already terminal.
+ */
+export function closeProjectById(
+  id: number,
+  status: Exclude<ProjectStatus, "active">,
+  outcome: string
+): boolean {
+  const db = getDb();
+  const result = db
+    .prepare(
+      `UPDATE projects SET status = ?, outcome = ?, updated_at = datetime('now') WHERE id = ? AND status NOT IN ('completed','cancelled')`
+    )
+    .run(status, outcome, id);
+  return result.changes > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +385,7 @@ export function loadFullBrain(): Brain {
       participants: JSON.parse(r.participants),
       lastActivityAt: r.last_activity_at,
       evidenceSnippet: r.evidence_snippet,
+      outcome: r.outcome,
     })
   );
 
@@ -347,6 +412,7 @@ export function loadFullBrain(): Brain {
       id: r.id,
       description: r.description,
       status: r.status,
+      resolutionReason: r.resolution_reason,
       owner: r.owner,
       relatedPeople: JSON.parse(r.related_people),
       dueHint: r.due_hint,
@@ -387,10 +453,10 @@ export function formatBrainAsContext(brain: Brain): string {
   for (const p of brain.projects) {
     lines.push(
       `- ${p.name} [${p.status}]: ${p.description ?? "no description"}${
-        p.participants.length ? ` | participants: ${p.participants.join(", ")}` : ""
-      }${p.evidenceSnippet ? ` | evidence: "${p.evidenceSnippet}"` : ""}${
-        p.lastActivityAt ? ` | last email evidence: ${toDateOnly(p.lastActivityAt)}` : ""
-      }`
+        p.outcome ? ` | outcome: ${p.outcome}` : ""
+      }${p.participants.length ? ` | participants: ${p.participants.join(", ")}` : ""}${
+        p.evidenceSnippet ? ` | evidence: "${p.evidenceSnippet}"` : ""
+      }${p.lastActivityAt ? ` | last email evidence: ${toDateOnly(p.lastActivityAt)}` : ""}`
     );
   }
 
@@ -404,7 +470,7 @@ export function formatBrainAsContext(brain: Brain): string {
     );
   }
 
-  lines.push("\n## Open Loops");
+  lines.push("\n## Open Loops (still outstanding)");
   const openOnly = brain.openLoops.filter((o) => o.status === "open");
   if (openOnly.length === 0) lines.push("(none)");
   for (const o of openOnly) {
@@ -412,6 +478,68 @@ export function formatBrainAsContext(brain: Brain): string {
       `- ${o.description}${o.owner ? ` | owner: ${o.owner}` : ""}${
         o.dueHint ? ` | due: ${o.dueHint}` : ""
       }${o.relatedPeople.length ? ` | people: ${o.relatedPeople.join(", ")}` : ""}`
+    );
+  }
+
+  // Resolved loops are still worth showing: knowing that something was
+  // explicitly settled (and why) is what lets an answer say "nothing is
+  // outstanding, because X" instead of just omitting it silently.
+  const resolved = brain.openLoops.filter((o) => o.status === "resolved");
+  if (resolved.length > 0) {
+    lines.push("\n## Resolved (NOT outstanding - do not present these as pending)");
+    for (const o of resolved) {
+      lines.push(
+        `- ${o.description}${
+          o.resolutionReason ? ` | resolved because: ${o.resolutionReason}` : ""
+        }`
+      );
+    }
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Renders the brain for the reconciliation pass. Differs from the query
+ * context in two ways: entries carry their database ids (so the model can
+ * point at exactly what to change), and open loops are listed alongside
+ * every project rather than filtered, since the whole point is to spot
+ * contradictions between them.
+ */
+export function renderBrainForReconciliation(brain: Brain): string {
+  const lines: string[] = [];
+
+  lines.push("## Projects");
+  if (brain.projects.length === 0) lines.push("(none)");
+  for (const p of brain.projects) {
+    lines.push(
+      `- id=${p.id} [${p.status}] ${p.name}: ${p.description ?? "no description"}${
+        p.outcome ? ` | outcome: ${p.outcome}` : ""
+      }${p.evidenceSnippet ? ` | evidence: "${p.evidenceSnippet}"` : ""}${
+        p.lastActivityAt ? ` | last activity: ${toDateOnly(p.lastActivityAt)}` : ""
+      }`
+    );
+  }
+
+  lines.push("\n## Open loops currently marked OPEN");
+  const openOnly = brain.openLoops.filter((o) => o.status === "open");
+  if (openOnly.length === 0) lines.push("(none)");
+  for (const o of openOnly) {
+    lines.push(
+      `- id=${o.id} ${o.description}${o.owner ? ` | owner: ${o.owner}` : ""}${
+        o.relatedPeople.length ? ` | people: ${o.relatedPeople.join(", ")}` : ""
+      }${o.dueHint ? ` | due: ${o.dueHint}` : ""}`
+    );
+  }
+
+  // People and interests give the model corroborating context (e.g. who a
+  // counterparty is) without being things it can modify.
+  lines.push("\n## People (context only - not editable)");
+  for (const p of brain.people) {
+    lines.push(
+      `- ${p.name}${p.email ? ` <${p.email}>` : ""}: ${p.relationshipContext ?? "no context"}${
+        p.evidenceSnippet ? ` | evidence: "${p.evidenceSnippet}"` : ""
+      }${p.lastInteractedAt ? ` | last interaction: ${toDateOnly(p.lastInteractedAt)}` : ""}`
     );
   }
 
@@ -455,6 +583,7 @@ interface ProjectRow {
   participants: string;
   last_activity_at: string | null;
   evidence_snippet: string | null;
+  outcome: string | null;
 }
 
 interface InterestRow {
@@ -469,6 +598,7 @@ interface OpenLoopRow {
   id: number;
   description: string;
   status: OpenLoop["status"];
+  resolution_reason: string | null;
   owner: string | null;
   related_people: string;
   due_hint: string | null;

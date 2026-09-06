@@ -48,7 +48,7 @@ roze prompt "What tools or topics have I been reading about lately?"
 For large mailboxes, `roze generate --limit 100` only processes the 100 most recent messages, which is useful for a quick end-to-end test before committing to a full run. `generate` self-throttles its Gmail API calls (default 8 req/sec, override with `ROZE_GMAIL_RPS`) and automatically backs off and retries on 429/quota errors, so a full run on a large mailbox will simply take longer rather than fail — it also caches fetched messages in `~/.roze/gmail-cache.json` so re-running `generate` after an interruption doesn't re-fetch messages already downloaded.
 
 - `auth` opens your browser to the Google consent screen and stores tokens locally.
-- `generate` fetches your Gmail history (with a progress bar), extracts People/Projects/Interests/Open Loops in batches via OpenAI, and persists the result to a local SQLite database.
+- `generate` fetches your Gmail history (with a progress bar), extracts People/Projects/Interests/Open Loops in batches via OpenAI, runs a final reconciliation pass to close anything the per-batch view couldn't tell was already settled, and persists the result to a local SQLite database.
 - `prompt <query>` is a single-trip command: it loads the full brain, injects it as context, and asks OpenAI to answer your question. It is not an interactive chatbot.
 
 ## Where local state lives
@@ -80,6 +80,18 @@ The middle ground I chose is an `evidence_snippet` on people, projects, and inte
 - **Batch extraction over per-email extraction.** Messages are grouped into threads, then batched ~15 threads per model call. Per-email extraction would have been far more expensive, and frankly, *worse*: judging whether a commitment is still unresolved requires seeing the whole thread, not one message in isolation.
 - **Name/email matching over embedding-based entity resolution.** People dedupe by email (falling back to name), projects by name, interests by topic — all case-insensitive. This is knowingly simple and will miss cases like one person writing from two addresses. Fuzzier resolution was the obvious next step I chose not to spend the scope on.
 
+### Reasoning about outcomes, not just mentions
+
+The hardest correctness problem here wasn't extraction, it was knowing when something has *ended*. The brain originally reported "clarify the final changes before submission" as an outstanding commitment on a take-home project — but six messages later in that same thread, the company had rejected the candidacy. The commitment wasn't outstanding, it was moot. Nothing was missing from the data; the model simply had no instruction to ask "did anything later settle this?"
+
+Three changes address that, and they're layered because each catches a case the others can't:
+
+- **Outcome determination happens first.** The extraction prompt now requires establishing how each thread actually turned out before extracting anything, explicitly enumerating terminal events (rejections, cancellations, questions answered, deadlines passed) and stating that a terminal event invalidates the commitments preceding it. Every candidate loop is judged as of the *newest* message, not the moment it was made.
+- **Projects record how they ended.** Status gained `cancelled` alongside `completed`/`stalled`, plus an `outcome` field ("July moved forward with other candidates, Aug 25"). Storing *why* something is closed means an answer can say "nothing is left, because…" instead of just silently omitting it. Resolved loops keep a `resolution_reason` for the same reason, and are rendered in a clearly-labeled separate section at query time rather than being dropped.
+- **A reconciliation pass catches what no single batch can see.** Batches are extracted independently, so a commitment recorded from one thread can never be closed by a resolution that arrived in a *different* batch — no single call ever sees both. After all batches finish, `generate` makes one additional call over the whole assembled brain (small enough to pass in full) asking which loops are now moot and which projects are terminal. Terminal statuses are then sticky in the same way resolved loops already were, so an out-of-order batch can't revive a project that ended.
+
+This is also why extraction runs on `gpt-4o` rather than `gpt-4o-mini` (override with `ROZE_MODEL`). Noticing that a rejection on Aug 25 invalidates a promise made on Aug 20, across a 10,000-character thread, is exactly the multi-hop inference the smaller model got wrong.
+
 ### Defining "interaction" precisely
 
 - A person's `last_interacted_at` is the most recent date they appear as sender or recipient of a **person-to-person** email. My first implementation used the newest email anywhere in the extraction batch, which meant an unrelated thread could donate its date to someone who wasn't on it — a plausible-looking but wrong answer.
@@ -99,4 +111,4 @@ Testing against a ~5,000-message account surfaced constraints that a small test 
 
 Per the brief's explicit non-goals: no web UI, no production Google verification (Testing mode with `agent@roze.ai` as a test user), no multi-user infrastructure, no processing of messages that arrive after the initial `generate` (no incremental sync or watch), and no integrations beyond Gmail.
 
-On testing, I wrote 24 unit tests covering the logic where correctness is non-obvious — Gmail MIME/base64url parsing and thread grouping, brain merge/dedupe behavior, interaction-date attribution (including a regression test for the Calendly case above), and output wrapping. I deliberately did not test against live Google or OpenAI APIs, or chase coverage on glue code.
+On testing, I wrote 31 unit tests covering the logic where correctness is non-obvious — Gmail MIME/base64url parsing and thread grouping, brain merge/dedupe behavior, interaction-date attribution (including a regression test for the Calendly case above), terminal-state stickiness for projects and loops, and output wrapping. I deliberately did not test against live Google or OpenAI APIs, or chase coverage on glue code. `npm run typecheck` type-checks the tests too, which the build config intentionally excludes so they stay out of `dist/`.
