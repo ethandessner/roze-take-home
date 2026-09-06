@@ -67,7 +67,7 @@ Four `roze prompt` queries against a real generated brain, from simple lookups t
 
 ![Daniel query](daniel.png)
 
-**A detailed status report across every person and project** — this is a good example of the memory correctly distinguishing a rejection (the July take-home was reviewed and turned down) from a cancellation or a success, and reporting that nothing is outstanding on it as a result:
+**A detailed status report across every person and project** — a good example of the memory distinguishing how different projects concluded (rejected vs. cancelled vs. completed) and correctly reporting nothing outstanding once one has ended:
 
 > `roze prompt "Give me a detailed status report: for every person and project you have, tell me who they are, how we're connected, and what - if anything - is still outstanding."`
 
@@ -97,7 +97,7 @@ rm -rf ~/.roze
 
 ### The central decision: a distilled memory, not an email index
 
-The brain stores condensed, structured facts about people, projects, interests, and open loops. It deliberately does **not** store or index individual messages. This is the decision everything else follows from, and has some downsides: `roze prompt` can answer *"what's still open with Wells, and when did we last actually talk?"* but it cannot answer *"what was the last email I received?"*. The latter is an inbox query, not a memory query, and supporting it would mean building a searchable message index, which works against the brief's "lightweight" framing and its instruction to keep the memory design easy to understand.
+The brain stores condensed, structured facts about people, projects, interests, and open loops. It deliberately does **not** store or index individual messages. This is the decision everything else follows from, and has some downsides: `roze prompt` can answer *"what's still open with Alex, and when did we last actually talk?"* but it cannot answer *"what was the last email I received?"*. The latter is an inbox query, not a memory query, and supporting it would mean building a searchable message index, which works against the brief's "lightweight" framing and its instruction to keep the memory design easy to understand.
 
 The middle ground I chose is an `evidence_snippet` on people, projects, and interests: a short concrete detail lifted from the actual email ("waiting on legal's redline before signing") rather than a generic restatement. That buys back most of the specificity you'd want from message-level access without maintaining an index. When a question truly falls outside the memory, `prompt` says so and then redirects to the closest thing it does know, rather than guessing or dead-ending.
 
@@ -110,15 +110,15 @@ The middle ground I chose is an `evidence_snippet` on people, projects, and inte
 
 ### Reasoning about outcomes, not just mentions
 
-The hardest correctness problem here wasn't extraction, it was knowing when something has *ended*. The brain originally reported "clarify the final changes before submission" as an outstanding commitment on a take-home project — but six messages later in that same thread, the company had rejected the candidacy. The commitment wasn't outstanding, it was moot. Nothing was missing from the data; the model simply had no instruction to ask "did anything later settle this?"
+The hardest correctness problem here wasn't extraction, it was knowing when something has *ended*. The brain originally reported an earlier promise as an outstanding commitment on a project, even though a later message in that same thread had already decisively settled the matter (a rejection, in the case that surfaced the bug). The commitment wasn't outstanding, it was moot. Nothing was missing from the data; the model simply had no instruction to ask "did anything later settle this?"
 
 Three changes address that, and they're layered because each catches a case the others can't:
 
 - **Outcome determination happens first.** The extraction prompt now requires establishing how each thread actually turned out before extracting anything, explicitly enumerating terminal events (rejections, cancellations, questions answered, deadlines passed) and stating that a terminal event invalidates the commitments preceding it. Every candidate loop is judged as of the *newest* message, not the moment it was made.
-- **Projects record how they ended, and *how* matters.** Status gained `cancelled`, `rejected`, and `stalled` alongside `completed`, plus an `outcome` field ("Wells decided to move forward with other candidates, Aug 25"). `rejected` is its own status, not folded into `cancelled`: submitting a take-home and being turned down after review is a different outcome from calling something off, and conflating them misreports what happened. Storing *why* something is closed means an answer can say "nothing is left, because…" instead of just silently omitting it. Resolved loops keep a `resolution_reason` for the same reason, and are rendered in a clearly-labeled separate section at query time rather than being dropped.
+- **Projects record how they ended, and *how* matters.** Status gained `cancelled`, `rejected`, and `stalled` alongside `completed`, plus an `outcome` field explaining how and why. `rejected` is its own status, not folded into `cancelled`: submitting work for review and being turned down is a different outcome from calling something off outright, and conflating them misreports what happened. Storing *why* something is closed means an answer can say "nothing is left, because…" instead of just silently omitting it. Resolved loops keep a `resolution_reason` for the same reason, and are rendered in a clearly-labeled separate section at query time rather than being dropped.
 - **A reconciliation pass catches what no single batch can see.** Batches are extracted independently, so a commitment recorded from one thread can never be closed by a resolution that arrived in a *different* batch — no single call ever sees both. After all batches finish, `generate` makes one additional call over the whole assembled brain (small enough to pass in full) asking which loops are now moot and which projects are terminal. Terminal statuses are then sticky in the same way resolved loops already were, so an out-of-order batch can't revive a project that ended.
 
-This is also why extraction runs on `gpt-4o` rather than `gpt-4o-mini` (override with `ROZE_MODEL`). Noticing that a rejection on Aug 25 invalidates a promise made on Aug 20, across a 10,000-character thread, is exactly the multi-hop inference the smaller model got wrong.
+This is also why extraction runs on `gpt-4o` rather than `gpt-4o-mini` (override with `ROZE_MODEL`). Noticing that a later rejection invalidates an earlier promise, across a long thread, is exactly the multi-hop inference the smaller model got wrong.
 
 ### Defining "interaction" precisely
 
