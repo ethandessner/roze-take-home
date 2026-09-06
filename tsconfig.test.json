@@ -1,0 +1,12 @@
+{
+  // Tests are excluded from the build tsconfig so they don't end up in dist/,
+  // which also meant they were never type-checked - type drift in test
+  // fixtures went unnoticed. `npm run typecheck` uses this config to check
+  // everything, tests included, without emitting anything.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
+}

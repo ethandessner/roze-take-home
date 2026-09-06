@@ -24,6 +24,7 @@ describe("formatBrainAsContext", () => {
           participants: ["Alice"],
           lastActivityAt: null,
           evidenceSnippet: null,
+          outcome: null,
         },
       ],
       interests: [
@@ -40,9 +41,9 @@ describe("formatBrainAsContext", () => {
           id: 1,
           description: "Send redline",
           status: "open",
+          resolutionReason: null,
           owner: "me",
           relatedPeople: [],
-          relatedProjectId: null,
           dueHint: null,
           sourceThreadId: null,
         },
@@ -106,6 +107,7 @@ describe("formatBrainAsContext", () => {
           participants: [],
           lastActivityAt: null,
           evidenceSnippet: "waiting on legal's redline before signing",
+          outcome: null,
         },
       ],
       interests: [],
@@ -118,7 +120,7 @@ describe("formatBrainAsContext", () => {
     expect(text).toContain('evidence: "waiting on legal\'s redline before signing"');
   });
 
-  it("omits resolved open loops from the rendered context", () => {
+  it("separates resolved loops from outstanding ones, with the reason they closed", () => {
     const brain: Brain = {
       people: [],
       projects: [],
@@ -126,11 +128,21 @@ describe("formatBrainAsContext", () => {
       openLoops: [
         {
           id: 1,
-          description: "Old resolved thing",
+          description: "Send the take-home submission",
           status: "resolved",
+          resolutionReason: "moot: July rejected the candidacy on Aug 25",
           owner: null,
           relatedPeople: [],
-          relatedProjectId: null,
+          dueHint: null,
+          sourceThreadId: null,
+        },
+        {
+          id: 2,
+          description: "Reply to Arijit about the role",
+          status: "open",
+          resolutionReason: null,
+          owner: null,
+          relatedPeople: [],
           dueHint: null,
           sourceThreadId: null,
         },
@@ -139,6 +151,16 @@ describe("formatBrainAsContext", () => {
     };
 
     const text = formatBrainAsContext(brain);
-    expect(text).not.toContain("Old resolved thing");
+    const outstanding = text.indexOf("Open Loops (still outstanding)");
+    const resolvedSection = text.indexOf("Resolved (NOT outstanding");
+
+    // The open loop must appear under "outstanding" and the resolved one
+    // after it, so the answering model can't mistake a settled commitment
+    // for something the user still owes.
+    expect(outstanding).toBeGreaterThan(-1);
+    expect(resolvedSection).toBeGreaterThan(outstanding);
+    expect(text.indexOf("Reply to Arijit about the role")).toBeLessThan(resolvedSection);
+    expect(text.indexOf("Send the take-home submission")).toBeGreaterThan(resolvedSection);
+    expect(text).toContain("resolved because: moot: July rejected the candidacy on Aug 25");
   });
 });

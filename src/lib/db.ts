@@ -1,6 +1,12 @@
 import Database from "better-sqlite3";
 import { BRAIN_DB_PATH, ensureRozeDir } from "./paths.js";
 
+// Kept as the single source of truth for the projects.status CHECK
+// constraint, both for the fresh-create schema and the migration that
+// rebuilds the table when an older database predates a newer status value.
+// Must be kept in sync with the ProjectStatus type in brainRepo.ts.
+const PROJECT_STATUSES = ["active", "completed", "stalled", "cancelled", "rejected"];
+
 let db: Database.Database | null = null;
 
 /**
@@ -47,10 +53,11 @@ function migrate(database: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       description TEXT,
-      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed','stalled')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (${PROJECT_STATUSES.map((s) => `'${s}'`).join(",")})),
       participants TEXT NOT NULL DEFAULT '[]',
       last_activity_at TEXT,
       evidence_snippet TEXT,
+      outcome TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
@@ -73,6 +80,7 @@ function migrate(database: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       description TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','resolved')),
+      resolution_reason TEXT,
       owner TEXT,
       related_people TEXT NOT NULL DEFAULT '[]',
       due_hint TEXT,
@@ -91,6 +99,45 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, "people", "evidence_snippet", "TEXT");
   addColumnIfMissing(database, "projects", "evidence_snippet", "TEXT");
   addColumnIfMissing(database, "interests", "evidence_snippet", "TEXT");
+
+  // Added alongside outcome-aware extraction.
+  addColumnIfMissing(database, "projects", "outcome", "TEXT");
+  addColumnIfMissing(database, "open_loops", "resolution_reason", "TEXT");
+
+  // New project status values (e.g. 'cancelled', then 'rejected') were
+  // added to the CHECK constraint after some databases already existed. A
+  // CHECK constraint can't be altered in place in SQLite, so an older
+  // database would reject those statuses outright - rebuild the table.
+  ensureProjectStatusCheckIsCurrent(database);
+}
+
+function ensureProjectStatusCheckIsCurrent(database: Database.Database): void {
+  const row = database
+    .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'projects'`)
+    .get() as { sql: string } | undefined;
+  if (!row || PROJECT_STATUSES.every((s) => row.sql.includes(`'${s}'`))) return;
+
+  database.exec(`
+    BEGIN;
+    CREATE TABLE projects_migrated (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (${PROJECT_STATUSES.map((s) => `'${s}'`).join(",")})),
+      participants TEXT NOT NULL DEFAULT '[]',
+      last_activity_at TEXT,
+      evidence_snippet TEXT,
+      outcome TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    INSERT INTO projects_migrated (id, name, description, status, participants, last_activity_at, evidence_snippet, outcome, created_at, updated_at)
+      SELECT id, name, description, status, participants, last_activity_at, evidence_snippet, outcome, created_at, updated_at FROM projects;
+    DROP TABLE projects;
+    ALTER TABLE projects_migrated RENAME TO projects;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name_ci ON projects (name COLLATE NOCASE);
+    COMMIT;
+  `);
 }
 
 function addColumnIfMissing(

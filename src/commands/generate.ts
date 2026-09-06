@@ -14,7 +14,7 @@ import {
   latestDateInThreads,
   computeLastInteractionByEmail,
 } from "../lib/batching.js";
-import { extractFromBatch } from "../lib/extract.js";
+import { extractFromBatch, reconcileBrain } from "../lib/extract.js";
 import {
   upsertPerson,
   upsertProject,
@@ -22,6 +22,9 @@ import {
   upsertOpenLoop,
   setMeta,
   loadFullBrain,
+  renderBrainForReconciliation,
+  resolveOpenLoopById,
+  closeProjectById,
 } from "../lib/brainRepo.js";
 
 const THREADS_PER_BATCH = 15;
@@ -118,15 +121,98 @@ export async function runGenerate(options: GenerateOptions = {}): Promise<void> 
 
   spinner.succeed(`Analyzed ${batches.length} batch(es) covering ${threads.length} threads.`);
 
+  await runReconciliation();
+
   setMeta("last_generated_at", new Date().toISOString());
   setMeta("total_emails_processed", String(messages.length));
 
   const brain = loadFullBrain();
   console.log("\nBrain generated successfully:");
+  const closedProjects = brain.projects.filter((p) =>
+    ["completed", "cancelled", "rejected"].includes(p.status)
+  ).length;
   console.log(`  People:      ${brain.people.length}`);
-  console.log(`  Projects:    ${brain.projects.length}`);
+  console.log(
+    `  Projects:    ${brain.projects.length} (${closedProjects} finished/cancelled)`
+  );
   console.log(`  Interests:   ${brain.interests.length}`);
-  console.log(`  Open loops:  ${brain.openLoops.filter((o) => o.status === "open").length} open`);
+  console.log(
+    `  Open loops:  ${brain.openLoops.filter((o) => o.status === "open").length} open, ${
+      brain.openLoops.filter((o) => o.status === "resolved").length
+    } resolved`
+  );
   console.log(`  Emails processed: ${messages.length}`);
   console.log("\nRun `roze prompt \"<your question>\"` to query it.");
+}
+
+/**
+ * Each extraction batch is analyzed in isolation, so a commitment recorded
+ * from one thread is never closed by a resolution that showed up in a
+ * different batch. This second pass looks at the assembled brain as a whole
+ * and closes the contradictions it finds.
+ */
+/**
+ * Reconciliation is run repeatedly until it stops changing anything, for two
+ * reasons. Closures cascade - cancelling a project moots the loops that fed
+ * it - and one pass reports both facts from the same stale snapshot, so the
+ * consequence isn't always drawn. The model is also not perfectly repeatable
+ * even at temperature 0, so a second look reliably catches what the first
+ * missed. Converges in 2-3 passes in practice; capped so it always ends.
+ */
+const MAX_RECONCILE_PASSES = 3;
+
+async function runReconciliation(): Promise<void> {
+  const spinner = ora("Reconciling the brain for stale open loops...").start();
+
+  let loopsClosed = 0;
+  let projectsClosed = 0;
+
+  try {
+    const initial = loadFullBrain();
+    if (initial.openLoops.length === 0 && initial.projects.length === 0) {
+      spinner.info("Nothing to reconcile.");
+      return;
+    }
+
+    for (let pass = 1; pass <= MAX_RECONCILE_PASSES; pass++) {
+      spinner.text = `Reconciling the brain (pass ${pass}/${MAX_RECONCILE_PASSES})...`;
+
+      const result = await reconcileBrain(
+        renderBrainForReconciliation(loadFullBrain())
+      );
+
+      let changedThisPass = 0;
+      for (const loop of result.loops_to_resolve) {
+        if (resolveOpenLoopById(loop.id, loop.reason)) {
+          loopsClosed++;
+          changedThisPass++;
+        }
+      }
+      for (const project of result.projects_to_close) {
+        if (closeProjectById(project.id, project.status, project.outcome)) {
+          projectsClosed++;
+          changedThisPass++;
+        }
+      }
+
+      // Settled: another pass has nothing left to find.
+      if (changedThisPass === 0) break;
+    }
+
+    if (loopsClosed === 0 && projectsClosed === 0) {
+      spinner.succeed("Reconciled: nothing stale found.");
+    } else {
+      spinner.succeed(
+        `Reconciled: closed ${loopsClosed} stale open loop(s) and ${projectsClosed} finished project(s).`
+      );
+    }
+  } catch (err) {
+    // A failed reconciliation shouldn't throw away a successful extraction,
+    // and any closures already applied in earlier passes are kept.
+    spinner.warn(
+      `Reconciliation stopped early, keeping partially reconciled brain: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
 }

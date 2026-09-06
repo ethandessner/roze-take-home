@@ -7,3 +7,7 @@ dist/
 # Local application state must never live in the repo, but ignore defensively
 # in case something writes here by mistake during development.
 .roze/
+*.db
+*.db-shm
+*.db-wal
+.scratch-*
