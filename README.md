@@ -51,6 +51,34 @@ For large mailboxes, `roze generate --limit 100` only processes the 100 most rec
 - `generate` fetches your Gmail history (with a progress bar), extracts People/Projects/Interests/Open Loops in batches via OpenAI, runs a final reconciliation pass to close anything the per-batch view couldn't tell was already settled, and persists the result to a local SQLite database.
 - `prompt <query>` is a single-trip command: it loads the full brain, injects it as context, and asks OpenAI to answer your question. It is not an interactive chatbot.
 
+## Demo: sample queries and answers
+
+Four `roze prompt` queries against a real generated brain, from simple lookups to a full synthesis across every category.
+
+**A single open loop:**
+
+> `roze prompt "What do I have coming up with Mak?"`
+
+![Mak query](mak.png)
+
+**A person, and their connection to a project:**
+
+> `roze prompt "Who is Daniel Magill and how is he connected to July?"`
+
+![Daniel query](daniel.png)
+
+**A detailed status report across every person and project** — this is a good example of the memory correctly distinguishing a rejection (the July take-home was reviewed and turned down) from a cancellation or a success, and reporting that nothing is outstanding on it as a result:
+
+> `roze prompt "Give me a detailed status report: for every person and project you have, tell me who they are, how we're connected, and what - if anything - is still outstanding."`
+
+![Detailed status report](summary.png)
+
+**A full rundown synthesizing People, Projects, and Open Loops in one answer,** with evidence snippets cited for each entry:
+
+> `roze prompt "Give me a full rundown of everything in my memory right now - every person, project, and open commitment you know about, with details on each."`
+
+![Full rundown](rundown.png)
+
 ## Where local state lives
 
 All local state — OAuth tokens, the SQLite brain database, and a small Gmail response cache — lives under `~/.roze/` and is never written into the repo:
