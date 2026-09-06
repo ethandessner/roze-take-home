@@ -110,7 +110,7 @@ The middle ground I chose is an `evidence_snippet` on people, projects, and inte
 
 ### Reasoning about outcomes, not just mentions
 
-The hardest correctness problem here wasn't extraction, it was knowing when something has *ended*. The brain originally reported an earlier promise as an outstanding commitment on a project, even though a later message in that same thread had already decisively settled the matter (a rejection, in the case that surfaced the bug). The commitment wasn't outstanding, it was moot. Nothing was missing from the data; the model simply had no instruction to ask "did anything later settle this?"
+The hardest correctness problem here was knowing when something has *ended*. The brain originally reported an outstanding commitment on a project, even though a later message in that same thread reported that the project had concluded.Nothing was missing from the data; the model simply had no instruction to ask "did anything later settle this?"
 
 Three changes address that, and they're layered because each catches a case the others can't:
 
