@@ -151,28 +151,52 @@ export async function runGenerate(options: GenerateOptions = {}): Promise<void> 
  * different batch. This second pass looks at the assembled brain as a whole
  * and closes the contradictions it finds.
  */
+/**
+ * Reconciliation is run repeatedly until it stops changing anything, for two
+ * reasons. Closures cascade - cancelling a project moots the loops that fed
+ * it - and one pass reports both facts from the same stale snapshot, so the
+ * consequence isn't always drawn. The model is also not perfectly repeatable
+ * even at temperature 0, so a second look reliably catches what the first
+ * missed. Converges in 2-3 passes in practice; capped so it always ends.
+ */
+const MAX_RECONCILE_PASSES = 3;
+
 async function runReconciliation(): Promise<void> {
   const spinner = ora("Reconciling the brain for stale open loops...").start();
 
+  let loopsClosed = 0;
+  let projectsClosed = 0;
+
   try {
-    const brain = loadFullBrain();
-    if (brain.openLoops.length === 0 && brain.projects.length === 0) {
+    const initial = loadFullBrain();
+    if (initial.openLoops.length === 0 && initial.projects.length === 0) {
       spinner.info("Nothing to reconcile.");
       return;
     }
 
-    const result = await reconcileBrain(renderBrainForReconciliation(brain));
+    for (let pass = 1; pass <= MAX_RECONCILE_PASSES; pass++) {
+      spinner.text = `Reconciling the brain (pass ${pass}/${MAX_RECONCILE_PASSES})...`;
 
-    let loopsClosed = 0;
-    for (const loop of result.loops_to_resolve) {
-      if (resolveOpenLoopById(loop.id, loop.reason)) loopsClosed++;
-    }
+      const result = await reconcileBrain(
+        renderBrainForReconciliation(loadFullBrain())
+      );
 
-    let projectsClosed = 0;
-    for (const project of result.projects_to_close) {
-      if (closeProjectById(project.id, project.status, project.outcome)) {
-        projectsClosed++;
+      let changedThisPass = 0;
+      for (const loop of result.loops_to_resolve) {
+        if (resolveOpenLoopById(loop.id, loop.reason)) {
+          loopsClosed++;
+          changedThisPass++;
+        }
       }
+      for (const project of result.projects_to_close) {
+        if (closeProjectById(project.id, project.status, project.outcome)) {
+          projectsClosed++;
+          changedThisPass++;
+        }
+      }
+
+      // Settled: another pass has nothing left to find.
+      if (changedThisPass === 0) break;
     }
 
     if (loopsClosed === 0 && projectsClosed === 0) {
@@ -183,9 +207,10 @@ async function runReconciliation(): Promise<void> {
       );
     }
   } catch (err) {
-    // A failed reconciliation shouldn't throw away a successful extraction.
+    // A failed reconciliation shouldn't throw away a successful extraction,
+    // and any closures already applied in earlier passes are kept.
     spinner.warn(
-      `Reconciliation pass failed, keeping unreconciled brain: ${
+      `Reconciliation stopped early, keeping partially reconciled brain: ${
         err instanceof Error ? err.message : String(err)
       }`
     );

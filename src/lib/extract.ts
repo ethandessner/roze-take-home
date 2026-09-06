@@ -136,6 +136,11 @@ export async function extractFromBatch(
 
   const completion = await openai.beta.chat.completions.parse({
     model: MODEL,
+    // Extraction and reconciliation are auditing tasks, not creative ones -
+    // the same mailbox should yield the same brain. At default sampling the
+    // reconciliation pass flip-flopped between marking a rejected project
+    // 'completed' and 'cancelled' across otherwise identical runs.
+    temperature: 0,
     messages: [
       { role: "system", content: buildSystemPrompt(accountOwnerEmail) },
       { role: "user", content: batchText },
@@ -182,11 +187,21 @@ const RECONCILE_SYSTEM_PROMPT = `You are auditing a personal memory "brain" that
 
 Your job is to find those contradictions by looking at the WHOLE brain at once.
 
-Close an open loop when other entries in the brain show it is no longer outstanding - most importantly when it was made MOOT rather than actually done. For example: if a loop says the user owes someone a submission, and a project or another entry shows that effort was rejected, cancelled, or otherwise ended, then that loop is moot and must be closed.
+CRITICAL - THE SAME THING OFTEN APPEARS MORE THAN ONCE UNDER DIFFERENT WORDING. Entries were created by independent batches that could not see each other and did not agree on names, so one real-world effort is frequently split across several projects, and one real commitment across several loops. Entries are matched by exact text, so near-duplicates were never merged. Treat entries that clearly describe the same underlying effort, job, application, event, or commitment as THE SAME THING even when the names differ (for example "Assignment Project for X", "Job Application with X", and a repository named after that same take-home are all one effort).
+
+This matters most for propagating endings: if ANY entry for an effort shows it ended - a rejection, cancellation, or decision - then EVERY other entry describing that same effort has also ended, and every loop that only existed to serve it is moot. Close all of them, not just the one that happens to carry the outcome text. A loop about finishing, submitting, or following up on work is moot once the effort it served was rejected or called off, even if the loop's wording never mentions the rejection.
+
+Close an open loop when other entries in the brain show it is no longer outstanding - most importantly when it was made MOOT rather than actually done.
+
+APPLY YOUR OWN CONCLUSIONS BEFORE JUDGING LOOPS. The statuses you are shown are the stale "before" picture. Decide which projects you are closing first, then evaluate every loop against that UPDATED picture - not the stale one. If you are closing a project in this same response, then any loop that existed only to serve that project is moot and must be closed in this same response too. Do not leave a loop open on the grounds that its project "is still active" when you yourself are about to cancel that project. Work the consequences all the way through: closing an effort closes the work items that fed it.
 
 Close a project when the evidence shows it reached a terminal state: 'completed' if it achieved its endpoint, 'cancelled' if it ended without completing (rejection, called off, decided against), 'stalled' if it clearly went dormant with no resolution.
 
-Be conservative and evidence-driven. Only act when the brain itself contains the justification - never speculate, and never close something merely because it is old. Cite the specific evidence in your reason/outcome text. If nothing needs changing, return empty arrays.`;
+When more than one candidate ending exists, choose the LATEST and most DECISIVE one. An outside decision outranks the user's own progress: the user finishing their part of the work is NOT the ending if the other party subsequently rejected, declined, or called it off. In that case the project is 'cancelled', not 'completed', and the outcome must name the rejection rather than the work the user finished. Delivering your side of something that was then turned down is not success, and describing it as completed would badly mislead the reader.
+
+RESOLVING IS NOT DEDUPLICATING. Never close a loop merely because another entry describes the same thing - "resolved" means the commitment is genuinely settled or moot, not that it is redundant. Recognizing duplicates only helps you see that an ENDING recorded on one entry applies to its twins; it is never a reason to close a duplicate on its own. So: if duplicates describe something still outstanding, leave ALL of them open. If they describe something settled, close ALL of them. Closing one copy while leaving its twin open is always wrong - it makes the memory contradict itself, and it misreports live work as finished.
+
+Be evidence-driven: the justification must come from the brain itself, and never close something merely because it is old. But do NOT hide behind caution when the brain plainly contains the answer - failing to close a commitment that has obviously been settled is just as wrong as inventing one. Cite the specific evidence, including which other entry settles it, in your reason/outcome text. If nothing needs changing, return empty arrays.`;
 
 /**
  * Second pass over the fully assembled brain. Individual extraction batches
@@ -201,6 +216,7 @@ export async function reconcileBrain(
 
   const completion = await openai.beta.chat.completions.parse({
     model: MODEL,
+    temperature: 0,
     messages: [
       { role: "system", content: RECONCILE_SYSTEM_PROMPT },
       { role: "user", content: brainContext },
