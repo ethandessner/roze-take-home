@@ -14,10 +14,14 @@ export interface Person {
   evidenceSnippet: string | null;
 }
 
-export type ProjectStatus = "active" | "completed" | "stalled" | "cancelled";
+export type ProjectStatus = "active" | "completed" | "stalled" | "cancelled" | "rejected";
 
 /** Statuses that mean the effort is over, one way or the other. */
-const TERMINAL_PROJECT_STATUSES: ProjectStatus[] = ["completed", "cancelled"];
+const TERMINAL_PROJECT_STATUSES: ProjectStatus[] = [
+  "completed",
+  "cancelled",
+  "rejected",
+];
 
 export interface Project {
   id: number;
@@ -330,7 +334,7 @@ export function closeProjectById(
   const db = getDb();
   const result = db
     .prepare(
-      `UPDATE projects SET status = ?, outcome = ?, updated_at = datetime('now') WHERE id = ? AND status NOT IN ('completed','cancelled')`
+      `UPDATE projects SET status = ?, outcome = ?, updated_at = datetime('now') WHERE id = ? AND status NOT IN ('completed','cancelled','rejected')`
     )
     .run(status, outcome, id);
   return result.changes > 0;

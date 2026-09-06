@@ -128,8 +128,8 @@ export async function runGenerate(options: GenerateOptions = {}): Promise<void> 
 
   const brain = loadFullBrain();
   console.log("\nBrain generated successfully:");
-  const closedProjects = brain.projects.filter(
-    (p) => p.status === "completed" || p.status === "cancelled"
+  const closedProjects = brain.projects.filter((p) =>
+    ["completed", "cancelled", "rejected"].includes(p.status)
   ).length;
   console.log(`  People:      ${brain.people.length}`);
   console.log(

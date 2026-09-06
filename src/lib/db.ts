@@ -1,6 +1,12 @@
 import Database from "better-sqlite3";
 import { BRAIN_DB_PATH, ensureRozeDir } from "./paths.js";
 
+// Kept as the single source of truth for the projects.status CHECK
+// constraint, both for the fresh-create schema and the migration that
+// rebuilds the table when an older database predates a newer status value.
+// Must be kept in sync with the ProjectStatus type in brainRepo.ts.
+const PROJECT_STATUSES = ["active", "completed", "stalled", "cancelled", "rejected"];
+
 let db: Database.Database | null = null;
 
 /**
@@ -47,7 +53,7 @@ function migrate(database: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       description TEXT,
-      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed','stalled','cancelled')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (${PROJECT_STATUSES.map((s) => `'${s}'`).join(",")})),
       participants TEXT NOT NULL DEFAULT '[]',
       last_activity_at TEXT,
       evidence_snippet TEXT,
@@ -98,17 +104,18 @@ function migrate(database: Database.Database): void {
   addColumnIfMissing(database, "projects", "outcome", "TEXT");
   addColumnIfMissing(database, "open_loops", "resolution_reason", "TEXT");
 
-  // 'cancelled' was added to the projects status CHECK later. A CHECK
-  // constraint can't be altered in place in SQLite, so an older database
-  // would reject cancelled projects outright - rebuild the table instead.
-  allowCancelledProjectStatus(database);
+  // New project status values (e.g. 'cancelled', then 'rejected') were
+  // added to the CHECK constraint after some databases already existed. A
+  // CHECK constraint can't be altered in place in SQLite, so an older
+  // database would reject those statuses outright - rebuild the table.
+  ensureProjectStatusCheckIsCurrent(database);
 }
 
-function allowCancelledProjectStatus(database: Database.Database): void {
+function ensureProjectStatusCheckIsCurrent(database: Database.Database): void {
   const row = database
     .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'projects'`)
     .get() as { sql: string } | undefined;
-  if (!row || row.sql.includes("'cancelled'")) return;
+  if (!row || PROJECT_STATUSES.every((s) => row.sql.includes(`'${s}'`))) return;
 
   database.exec(`
     BEGIN;
@@ -116,7 +123,7 @@ function allowCancelledProjectStatus(database: Database.Database): void {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
       description TEXT,
-      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','completed','stalled','cancelled')),
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (${PROJECT_STATUSES.map((s) => `'${s}'`).join(",")})),
       participants TEXT NOT NULL DEFAULT '[]',
       last_activity_at TEXT,
       evidence_snippet TEXT,

@@ -19,15 +19,15 @@ const ProjectSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   status: z
-    .enum(["active", "completed", "stalled", "cancelled"])
+    .enum(["active", "completed", "stalled", "cancelled", "rejected"])
     .describe(
-      "The state of this project AS OF THE NEWEST MESSAGE about it. 'completed' = reached its intended end. 'cancelled' = ended without completing (rejected, called off, decided against, superseded). 'stalled' = went quiet with no resolution. 'active' = genuinely still in motion."
+      "The state of this project AS OF THE NEWEST MESSAGE about it. 'completed' = the user's side succeeded and was accepted/achieved its goal. 'rejected' = the user did their part (applied, submitted, pitched, proposed) and the OTHER PARTY reviewed it and said no - a job application, take-home, or proposal that was turned down. 'cancelled' = the effort was called off or abandoned BEFORE being carried through - by either side, for reasons other than a review-and-reject. 'stalled' = went quiet with no resolution. 'active' = genuinely still in motion. Do not use 'cancelled' for a rejection after review - that is 'rejected'."
     ),
   outcome: z
     .string()
     .nullable()
     .describe(
-      "If the project has ENDED (completed or cancelled), state plainly how and why it ended, quoting or closely paraphrasing the deciding message - e.g. 'July decided to move forward with other candidates (Wells, Aug 25)'. Leave null only if the project is genuinely still active or stalled."
+      "If the project has ENDED, state plainly how and why, quoting or closely paraphrasing the deciding message - e.g. 'July decided to move forward with other candidates (Wells, Aug 25)'. Leave null only if the project is genuinely still active or stalled."
     ),
   participants: z.array(z.string()),
   evidence_snippet: z
@@ -173,7 +173,7 @@ const ReconciliationSchema = z.object({
   projects_to_close: z.array(
     z.object({
       id: z.number().describe("The numeric id of the project to close."),
-      status: z.enum(["completed", "cancelled", "stalled"]),
+      status: z.enum(["completed", "cancelled", "rejected", "stalled"]),
       outcome: z
         .string()
         .describe("How and why this project ended, citing the deciding evidence."),
@@ -195,9 +195,9 @@ Close an open loop when other entries in the brain show it is no longer outstand
 
 APPLY YOUR OWN CONCLUSIONS BEFORE JUDGING LOOPS. The statuses you are shown are the stale "before" picture. Decide which projects you are closing first, then evaluate every loop against that UPDATED picture - not the stale one. If you are closing a project in this same response, then any loop that existed only to serve that project is moot and must be closed in this same response too. Do not leave a loop open on the grounds that its project "is still active" when you yourself are about to cancel that project. Work the consequences all the way through: closing an effort closes the work items that fed it.
 
-Close a project when the evidence shows it reached a terminal state: 'completed' if it achieved its endpoint, 'cancelled' if it ended without completing (rejection, called off, decided against), 'stalled' if it clearly went dormant with no resolution.
+Close a project when the evidence shows it reached a terminal state: 'completed' if the user's side succeeded and was accepted, 'rejected' if the user did their part (applied, submitted, pitched) and the other party reviewed it and said no, 'cancelled' if it was called off or abandoned before being carried through (not a review-and-reject), 'stalled' if it clearly went dormant with no resolution.
 
-When more than one candidate ending exists, choose the LATEST and most DECISIVE one. An outside decision outranks the user's own progress: the user finishing their part of the work is NOT the ending if the other party subsequently rejected, declined, or called it off. In that case the project is 'cancelled', not 'completed', and the outcome must name the rejection rather than the work the user finished. Delivering your side of something that was then turned down is not success, and describing it as completed would badly mislead the reader.
+When more than one candidate ending exists, choose the LATEST and most DECISIVE one. An outside decision outranks the user's own progress: the user finishing their part of the work is NOT the ending if the other party subsequently rejected it. That is 'rejected', not 'completed' and not 'cancelled' - the user didn't cancel anything, they were turned down after review. The outcome must name the rejection rather than the work the user finished. Delivering your side of something that was then turned down is not success, and describing it as 'completed' or 'cancelled' would misrepresent what actually happened.
 
 RESOLVING IS NOT DEDUPLICATING. Never close a loop merely because another entry describes the same thing - "resolved" means the commitment is genuinely settled or moot, not that it is redundant. Recognizing duplicates only helps you see that an ENDING recorded on one entry applies to its twins; it is never a reason to close a duplicate on its own. So: if duplicates describe something still outstanding, leave ALL of them open. If they describe something settled, close ALL of them. Closing one copy while leaving its twin open is always wrong - it makes the memory contradict itself, and it misreports live work as finished.
 
@@ -247,7 +247,7 @@ export async function answerQuery(
         role: "system",
         content: `You are the user's personal memory assistant. Answer the user's question using ONLY the structured memory below about people, projects, interests, and open loops. This memory is a distilled summary of the user's email history, not a full email log or index - it does not contain every individual message, subject line, or exact send time, only durable facts extracted from batches of emails. For a person, "last email evidence" is the latest date they genuinely appeared as a sender/recipient of an email - a real interaction date. For a project, "last email evidence" is only an approximate date (the newest email seen in the batch of threads that project was extracted from), since projects aren't tied to a single counterparty; don't state it with the same confidence as a person's interaction date. Neither is necessarily the single most recent email in the whole mailbox.
 
-Pay close attention to whether things have ENDED. A project marked [completed] or [cancelled] is over, and its "outcome" field says how it ended - if asked what's left to do on such a project, the correct answer is that nothing is, and you should say why, citing the outcome. Likewise, loops listed under "Resolved" are settled, not pending; never present a resolved loop as something the user still owes. Do not invent remaining work for an effort the memory shows is finished.
+Pay close attention to whether things have ENDED. A project marked [completed], [cancelled], or [rejected] is over, and its "outcome" field says how it ended - if asked what's left to do on such a project, the correct answer is that nothing is, and you should say why, citing the outcome exactly. These three statuses mean different things and the answer must reflect which one it actually is: 'rejected' means the user did their part and the other side reviewed it and said no - do not call this "cancelled" (which means called off, not turned down after review) or "completed" (which means it succeeded). Getting this word wrong misrepresents what happened to the user. Likewise, loops listed under "Resolved" are settled, not pending; never present a resolved loop as something the user still owes. Do not invent remaining work for an effort the memory shows is finished.
 
 Be as SPECIFIC as the memory allows: name the actual person/project/topic, cite the actual date(s) and evidence snippets given below verbatim rather than paraphrasing them away, and prefer concrete details over vague summaries (e.g. instead of "you discussed a meeting", say what the meeting was about and when, if that detail is present below). Do not hedge with phrases like "likely" or "probably" about facts that are directly stated in the memory (e.g. names are given exactly - don't guess who someone is).
 

@@ -65,26 +65,45 @@ describe("upsertProject", () => {
     upsertProject({ name: "July Take Home", status: "active" });
     upsertProject({
       name: "july take home",
-      status: "cancelled",
+      status: "rejected",
       outcome: "July moved forward with other candidates (Wells, Aug 25)",
     });
 
     const brain = loadFullBrain();
-    expect(brain.projects[0].status).toBe("cancelled");
+    expect(brain.projects[0].status).toBe("rejected");
     expect(brain.projects[0].outcome).toContain("other candidates");
   });
 
   it("does not revive a terminal project when an out-of-order batch still sees it active", () => {
     upsertProject({
       name: "July Take Home",
-      status: "cancelled",
+      status: "rejected",
       outcome: "Rejected on Aug 25",
     });
     upsertProject({ name: "july take home", status: "active" });
 
     const brain = loadFullBrain();
-    expect(brain.projects[0].status).toBe("cancelled");
+    expect(brain.projects[0].status).toBe("rejected");
     expect(brain.projects[0].outcome).toBe("Rejected on Aug 25");
+  });
+
+  // The whole point of this status: submitting and being turned down after
+  // review is a materially different outcome from cancelling something
+  // outright, and reporting the wrong one to the user misrepresents what
+  // actually happened (this is the bug the user caught in practice).
+  it("distinguishes 'rejected' (submitted, then turned down) from 'cancelled' (called off)", () => {
+    upsertProject({
+      name: "July Take Home",
+      status: "rejected",
+      outcome: "Submitted the assignment; Wells decided not to move forward after review.",
+    });
+    upsertProject({ name: "Side Project", status: "cancelled", outcome: "Never got started." });
+
+    const brain = loadFullBrain();
+    const july = brain.projects.find((p) => p.name === "July Take Home");
+    const side = brain.projects.find((p) => p.name === "Side Project");
+    expect(july?.status).toBe("rejected");
+    expect(side?.status).toBe("cancelled");
   });
 });
 
@@ -165,10 +184,10 @@ describe("reconciliation writes", () => {
     upsertProject({ name: "July Take Home", status: "active" });
     const id = loadFullBrain().projects[0].id;
 
-    expect(closeProjectById(id, "cancelled", "Rejected Aug 25")).toBe(true);
+    expect(closeProjectById(id, "rejected", "Rejected Aug 25")).toBe(true);
 
     const brain = loadFullBrain();
-    expect(brain.projects[0].status).toBe("cancelled");
+    expect(brain.projects[0].status).toBe("rejected");
     expect(brain.projects[0].outcome).toBe("Rejected Aug 25");
   });
 
@@ -180,7 +199,7 @@ describe("reconciliation writes", () => {
     });
     const id = loadFullBrain().projects[0].id;
 
-    expect(closeProjectById(id, "cancelled", "Rejected Aug 25")).toBe(false);
+    expect(closeProjectById(id, "rejected", "Rejected Aug 25")).toBe(false);
     expect(loadFullBrain().projects[0].outcome).toBe("Shipped it");
   });
 });
